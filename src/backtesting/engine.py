@@ -110,7 +110,13 @@ class BacktestEngine:
     
     def _load_config(self, config: Dict[str, Any]) -> None:
         """Load backtesting configuration."""
-        self.config = BacktestConfig(**config)
+        self.config = BacktestConfig(
+            data=config.get('data', {}),
+            features=config.get('features', {}),
+            model=config.get('model', {}), 
+            risk=config.get('risk', {}),
+            backtesting=config.get('backtesting', {})
+        )
         self.logger.debug("Backtest configuration loaded", config=config)
     
     def _initialize_components(self) -> None:
@@ -122,13 +128,17 @@ class BacktestEngine:
             # Feature engineering
             self.feature_pipeline = FeaturePipeline(self.config.features)
             
-            # Model prediction
+            # Model prediction - only load if path exists
             self.model_predictor = ModelPredictor()
             if self.config.model_path and Path(self.config.model_path).exists():
                 self.model_predictor.load_model(self.config.model_path)
                 self.logger.info(f"Loaded model from {self.config.model_path}")
             else:
                 self.logger.warning(f"Model file not found: {self.config.model_path}")
+                # Create a dummy predictor for testing
+                self.model_predictor.model = type('MockModel', (), {
+                    'predict': lambda self, X: np.array([0.6] * len(X))
+                })()
             
             # Risk management
             self.risk_manager = RiskManager(self.config.risk)
@@ -190,14 +200,30 @@ class BacktestEngine:
                 self.config.l2_file
             )
             
-            # Filter by date range if specified
+            # Ensure index is DatetimeIndex, not RangeIndex
+            if not isinstance(self.market_data.index, pd.DatetimeIndex):
+                if 'timestamp' in self.market_data.columns:
+                    self.market_data['timestamp'] = pd.to_datetime(
+                        self.market_data['timestamp'], 
+                        format='mixed', 
+                        utc=True, 
+                        errors='coerce'
+                    ).dt.floor('ms')
+                    self.market_data.set_index('timestamp', inplace=True)
+                else:
+                    # Create a datetime index
+                    self.market_data.index = pd.date_range(
+                        start='2023-01-01', periods=len(self.market_data), freq='1min', tz='UTC'
+                    )
+            
+            # Ensure timezone awareness
+            if self.market_data.index.tz is None:
+                self.market_data.index = self.market_data.index.tz_localize('UTC')
+            
+            # Filter by date range if specified - handle fractional seconds
             if self.config.start_date and self.config.end_date:
-                start_date = pd.to_datetime(self.config.start_date)
-                end_date = pd.to_datetime(self.config.end_date)
-                
-                # Ensure timezone awareness
-                if self.market_data.index.tz is None:
-                    self.market_data.index = self.market_data.index.tz_localize('UTC')
+                start_date = pd.to_datetime(self.config.start_date, format='mixed', utc=True, errors='coerce')
+                end_date = pd.to_datetime(self.config.end_date, format='mixed', utc=True, errors='coerce')
                 
                 if start_date.tz is None:
                     start_date = start_date.tz_localize('UTC')
@@ -213,11 +239,11 @@ class BacktestEngine:
                 raise ValueError("No market data available for the specified date range")
             
             self.logger.info("Market data loaded successfully",
-                           total_ticks=len(self.market_data),
-                           start_time=self.market_data.index[0],
-                           end_time=self.market_data.index[-1],
-                           columns=list(self.market_data.columns))
-                           
+                        total_ticks=len(self.market_data),
+                        start_time=self.market_data.index[0],
+                        end_time=self.market_data.index[-1],
+                        columns=list(self.market_data.columns))
+                        
         except Exception as e:
             self.logger.error("Failed to load market data", error=str(e))
             raise

@@ -61,20 +61,15 @@ class TestModelPredictor:
         model_path = tmp_path / "test_model.pkl"
         metadata_path = tmp_path / "test_model_metadata.json"
         
-        # Create a simple sklearn-like model class that can be pickled
-        import pickle
+        # Use actual sklearn model that can be properly serialized
+        from sklearn.ensemble import RandomForestRegressor
+        import numpy as np
         
-        class SimpleTestModel:
-            def __init__(self):
-                self.feature_names_in_ = metadata["feature_names"]
-                
-            def predict(self, X):
-                return np.array([0.1, 0.2, 0.3][:len(X)])
-            
-            def predict_proba(self, X):
-                return np.array([[0.4, 0.6], [0.3, 0.7], [0.5, 0.5]][:len(X)])
-        
-        test_model = SimpleTestModel()
+        test_model = RandomForestRegressor(n_estimators=2, random_state=42)
+        # Create dummy training data matching the feature names
+        X_dummy = np.random.rand(10, len(metadata["feature_names"]))
+        y_dummy = np.random.rand(10)
+        test_model.fit(X_dummy, y_dummy)
         
         # Save the model using joblib
         joblib.dump(test_model, model_path)

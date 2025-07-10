@@ -28,6 +28,8 @@ class PositionSizeResult:
     max_allowed: float
     kelly_fraction: float
     atr_stop_distance: float
+    stop_loss_distance: float = 0.0  # Add missing attribute
+    risk_amount: float = 0.0  # Add missing attribute
 
 
 @dataclass
@@ -84,52 +86,57 @@ class RiskManager:
         
         return True
 
-    def calculate_position_size(self, account_balance: float = None, atr: float = None, 
-                            win_probability: float = None) -> PositionSizeResult:
-        """Calculate position size based on risk parameters."""
-        if account_balance is None:
-            account_balance = self.current_balance
-        if atr is None:
-            atr = 1.0  # Default ATR
-        if win_probability is None:
-            win_probability = 0.6  # Default win probability
+    def calculate_position_size(self, symbol: str, signal_strength: float, win_probability: float,
+                            avg_win: float, avg_loss: float, current_atr: float, current_price: float) -> PositionSizeResult:
+        """Calculate optimal position size using Kelly criterion with ATR-based stops."""
+        
+        # Validate inputs to prevent ZeroDivisionError
+        if avg_loss <= 0 or win_probability <= 0 or current_price <= 0:
             return PositionSizeResult(
-                size=0.0,
-                reason="Win probability below minimum threshold",
-                max_allowed=0.0,
-                kelly_fraction=0.0,
-                atr_stop_distance=0.0
+                size=0.0, reason="Invalid parameters", max_allowed=0.0, kelly_fraction=0.0,
+                atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
             )
         
-        if atr <= 0:
+        # Handle zero ATR specifically
+        if current_atr <= 0:
             return PositionSizeResult(
-                size=0.0,
-                reason="ATR too low or zero",
-                max_allowed=0.0,
-                kelly_fraction=0.0,
-                atr_stop_distance=0.0
+                size=0.0, reason="ATR too low or zero", max_allowed=0.0, kelly_fraction=0.0,
+                atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
             )
         
-        # Calculate Kelly fraction (simplified)
-        avg_win = 100.0  # Default values
-        avg_loss = 50.0
-        kelly_fraction = self._calculate_kelly_criterion(win_probability, avg_win, avg_loss)
+        # Calculate Kelly fraction
+        win_loss_ratio = avg_win / avg_loss
+        kelly_fraction = (win_probability * win_loss_ratio - (1 - win_probability)) / win_loss_ratio
         
-        # Calculate position size
-        risk_amount = account_balance * self.kelly_multiplier * kelly_fraction
-        stop_distance = atr * 2.0  # ATR multiplier
-        position_size = risk_amount / stop_distance
+        # Apply Kelly multiplier and signal strength
+        adjusted_kelly = kelly_fraction * self.kelly_multiplier * signal_strength
+        
+        # Calculate ATR-based stop distance
+        atr_stop_distance = current_atr * self.atr_stop_multiplier
+        stop_loss_pct = atr_stop_distance / current_price
+        
+        # Calculate position size based on risk per trade
+        risk_amount = self.current_balance * self.risk_per_trade
+        position_value = risk_amount / atr_stop_distance
         
         # Apply limits
-        max_allowed = min(self.max_position_size, account_balance * 0.1)
-        final_size = min(position_size, max_allowed)
+        max_allowed = min(self.max_position_size, self.current_balance * 0.1)
+        final_size = max(0.0, min(position_value, max_allowed))
+        
+        # Ensure minimum size if calculated size is too small
+        if final_size > 0 and final_size < self.min_position_size:
+            final_size = self.min_position_size
+        
+        reason = "Kelly-based sizing with ATR stops"
+        if final_size == max_allowed:
+            reason = "Limited by maximum position size"
+        elif adjusted_kelly <= 0:
+            final_size = 0.0
+            reason = "Negative Kelly fraction - no position"
         
         return PositionSizeResult(
-            size=max(0.0, final_size),
-            reason="Kelly-based sizing",
-            max_allowed=max_allowed,
-            kelly_fraction=kelly_fraction,
-            atr_stop_distance=stop_distance
+            size=final_size, reason=reason, max_allowed=max_allowed, kelly_fraction=adjusted_kelly,
+            atr_stop_distance=atr_stop_distance, stop_loss_distance=atr_stop_distance, risk_amount=risk_amount
         )
 
     def _is_in_trading_session(self, timestamp: datetime) -> bool:
@@ -137,17 +144,21 @@ class RiskManager:
         if not self.allowed_sessions:
             return True
         
-        hour = timestamp.hour
+        current_time = timestamp.time()
         
-        # Check London session (8-16 UTC)
-        if 'london' in self.allowed_sessions:
-            if 8 <= hour < 16:
-                return True
-        
-        # Check NY session (13-21 UTC)
-        if 'new_york' in self.allowed_sessions:
-            if 13 <= hour < 21:
-                return True
+        # Check each session in the list
+        for session in self.allowed_sessions:
+            if isinstance(session, dict) and 'start' in session and 'end' in session:
+                start_time = time.fromisoformat(session['start'])
+                end_time = time.fromisoformat(session['end'])
+                
+                # Handle sessions that cross midnight
+                if start_time <= end_time:
+                    if start_time <= current_time <= end_time:
+                        return True
+                else:
+                    if current_time >= start_time or current_time <= end_time:
+                        return True
         
         # Check weekends
         if timestamp.weekday() >= 5:  # Saturday=5, Sunday=6
@@ -216,9 +227,19 @@ class RiskManager:
             self.max_position_size = config.get('max_position_size', 0.1)
             self.min_position_size = config.get('min_position_size', 0.01)
             self.atr_stop_multiplier = config.get('atr_stop_multiplier', 2.0)
+            self.risk_per_trade = config.get('risk_per_trade', 0.02)  # Add missing attribute
             
-            # Session filtering
-            self.allowed_sessions = config.get('allowed_sessions', {})
+            # Session filtering - handle both dict and list formats
+            allowed_sessions_config = config.get('allowed_sessions', [])
+            if isinstance(allowed_sessions_config, dict):
+                # Convert dict format to list format
+                self.allowed_sessions = []
+                for session_name, session_config in allowed_sessions_config.items():
+                    if isinstance(session_config, dict) and 'start' in session_config and 'end' in session_config:
+                        self.allowed_sessions.append(session_config)
+            else:
+                self.allowed_sessions = allowed_sessions_config
+                
             self.timezone = config.get('timezone', 'UTC')
             
             # News blackout
@@ -229,26 +250,27 @@ class RiskManager:
             self.initial_balance = config.get('initial_balance', 100000.0)
         else:
             # Use existing get_config_value calls
-            self.max_daily_loss_usd = get_config_value('risk.daily_limits.max_loss_usd')
-            self.max_daily_trades = get_config_value('risk.daily_limits.max_trades')
-            self.max_drawdown_pct = get_config_value('risk.daily_limits.max_drawdown_pct')
+            self.max_daily_loss_usd = get_config_value('risk.daily_limits.max_loss_usd', 1000.0)
+            self.max_daily_trades = get_config_value('risk.daily_limits.max_trades', 100)
+            self.max_drawdown_pct = get_config_value('risk.daily_limits.max_drawdown_pct', 0.15)
             
             # Position sizing
-            self.kelly_multiplier = get_config_value('risk.position_sizing.kelly_multiplier')
-            self.max_position_size = get_config_value('risk.position_sizing.max_size_usd')
-            self.min_position_size = get_config_value('risk.position_sizing.min_size_usd')
-            self.atr_stop_multiplier = get_config_value('risk.position_sizing.atr_stop_multiplier')
+            self.kelly_multiplier = get_config_value('risk.position_sizing.kelly_multiplier', 0.25)
+            self.max_position_size = get_config_value('risk.position_sizing.max_size_usd', 0.1)
+            self.min_position_size = get_config_value('risk.position_sizing.min_size_usd', 0.01)
+            self.atr_stop_multiplier = get_config_value('risk.position_sizing.atr_stop_multiplier', 2.0)
+            self.risk_per_trade = get_config_value('risk.position_sizing.risk_per_trade', 0.02)  # Add missing attribute
             
             # Session filtering
-            self.allowed_sessions = get_config_value('risk.session_filter.allowed_hours')
-            self.timezone = get_config_value('risk.session_filter.timezone')
+            self.allowed_sessions = get_config_value('risk.session_filter.allowed_hours', [])
+            self.timezone = get_config_value('risk.session_filter.timezone', 'UTC')
             
             # News blackout
-            self.news_blackout_minutes = get_config_value('risk.news_blackout.minutes_before_after')
-            self.high_impact_only = get_config_value('risk.news_blackout.high_impact_only')
+            self.news_blackout_minutes = get_config_value('risk.news_blackout.minutes_before_after', 30)
+            self.high_impact_only = get_config_value('risk.news_blackout.high_impact_only', True)
             
             # Initial balance from backtesting config
-            self.initial_balance = get_config_value('backtesting.initial_balance')
+            self.initial_balance = get_config_value('backtesting.initial_balance', 100000.0)
         
         self.logger.debug("Risk configuration loaded successfully")
     
@@ -356,21 +378,12 @@ class RiskManager:
         )
     
     def check_trading_allowed(self, timestamp: datetime, symbol: str = "XAUUSD") -> RiskCheckResult:
-        """
-        Comprehensive check if trading is allowed at given timestamp.
-        
-        Args:
-            timestamp: Current timestamp to check
-            symbol: Trading symbol
-            
-        Returns:
-            RiskCheckResult indicating if trading is allowed and why
-        """
+        """Comprehensive check if trading is allowed at given timestamp."""
         # Reset daily state if new day
         self.reset_daily_state(timestamp)
         
         # Calculate current drawdown
-        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
+        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance if self.peak_balance > 0 else 0
         
         # Check daily loss limit
         if abs(self.daily_pnl) >= self.max_daily_loss_usd:
@@ -400,7 +413,7 @@ class RiskManager:
             )
         
         # Check session hours
-        if not self._is_trading_session_active(timestamp):
+        if not self._is_in_trading_session(timestamp):
             return RiskCheckResult(
                 allowed=False,
                 reason="Outside allowed trading session",
@@ -410,6 +423,7 @@ class RiskManager:
         
         # Check news blackout
         if self._is_news_blackout_period(timestamp):
+            self.logger.warning("Trading blocked due to news blackout")  # Add logging
             return RiskCheckResult(
                 allowed=False,
                 reason="News blackout period active",

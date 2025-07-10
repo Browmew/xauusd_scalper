@@ -48,14 +48,12 @@ class DataLoader:
         self.tick_data_path = get_config_value("data.sources.tick_data")
         self.l2_data_path = get_config_value("data.sources.l2_data")
         
-        # Data type optimizations for memory efficiency
+        # Data type optimizations for memory efficiency - only include guaranteed columns
         self.tick_dtypes = {
             'timestamp': 'object',  # Will convert to datetime64[ms]
             'bid': 'float32',
             'ask': 'float32',
-            'bid_volume': 'float32',
-            'ask_volume': 'float32',
-            'spread': 'float32'
+            'volume': 'float32'
         }
         
         self.l2_dtypes = {
@@ -135,23 +133,8 @@ class DataLoader:
         return df
     
     def load_tick_data(self, file_path: str, 
-                       chunksize: Optional[int] = None) -> DataFrame:
-        """
-        Load tick data from compressed CSV file.
-        
-        This method efficiently loads tick-level market data with optimized
-        data types and memory usage. Supports chunked loading for very large files.
-        
-        Args:
-            file_path: Path to the tick data file (can be .csv or .csv.gz)
-            chunksize: Optional chunk size for processing large files
-            
-        Returns:
-            DataFrame with tick data indexed by timestamp
-            
-        Time Complexity: O(n log n) where n is number of rows (due to sorting)
-        Space Complexity: O(n) for the DataFrame
-        """
+                    chunksize: Optional[int] = None) -> DataFrame:
+        """Load tick data from compressed CSV file."""
         validated_path = self._validate_file_path(file_path)
         
         self.logger.info("Loading tick data", 
@@ -170,7 +153,6 @@ class DataLoader:
                 chunks = []
                 chunk_reader = pd.read_csv(
                     validated_path,
-                    dtype=self.tick_dtypes,
                     engine='pyarrow',
                     compression=compression,
                     chunksize=chunksize,
@@ -179,6 +161,10 @@ class DataLoader:
                 
                 for chunk_num, chunk in enumerate(chunk_reader):
                     self.logger.debug("Processing tick chunk", chunk_num=chunk_num)
+                    # Only apply dtypes for columns that exist
+                    for col, dtype in self.tick_dtypes.items():
+                        if col in chunk.columns and col != 'timestamp':
+                            chunk[col] = chunk[col].astype(dtype)
                     chunk = self._optimize_timestamp_column(chunk)
                     chunks.append(chunk)
                 
@@ -186,21 +172,24 @@ class DataLoader:
             else:
                 df = pd.read_csv(
                     validated_path,
-                    dtype=self.tick_dtypes,
                     engine='pyarrow',
                     compression=compression,
                     parse_dates=False
                 )
+                # Only apply dtypes for columns that exist
+                for col, dtype in self.tick_dtypes.items():
+                    if col in df.columns and col != 'timestamp':
+                        df[col] = df[col].astype(dtype)
                 df = self._optimize_timestamp_column(df)
             
             # Remove any duplicate timestamps (keep last)
             df = df[~df.index.duplicated(keep='last')]
             
             self.logger.info("Tick data loaded successfully", 
-                           rows=len(df),
-                           memory_mb=df.memory_usage(deep=True).sum() / 1024**2,
-                           start_time=df.index.min(),
-                           end_time=df.index.max())
+                        rows=len(df),
+                        memory_mb=df.memory_usage(deep=True).sum() / 1024**2,
+                        start_time=df.index.min(),
+                        end_time=df.index.max())
             
             return df
             

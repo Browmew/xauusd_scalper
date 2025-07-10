@@ -12,88 +12,6 @@ from datetime import datetime, timezone
 def sample_data_df() -> pd.DataFrame:
     """
     Generate sample OHLCV and order book data for testing feature functions.
-    
-    Returns:
-        pd.DataFrame: Test dataset with the exact schema expected by feature functions.
-                     Contains 100 rows of realistic market data with proper column types.
-    """
-    # Create realistic time index with 100ms frequency
-    periods = 100
-    start_time = datetime(2024, 1, 1, 9, 30, 0, tzinfo=timezone.utc)
-    index = pd.date_range(
-        start=start_time,
-        periods=periods,
-        freq='100ms',
-        tz='UTC'
-    )
-    
-    # Generate realistic XAUUSD price data around $2000
-    np.random.seed(42)  # For reproducible tests
-    base_price = 2000.0
-    
-    # Generate price walk with realistic volatility
-    price_changes = np.random.normal(0, 0.5, periods)
-    prices = base_price + np.cumsum(price_changes)
-    
-    # Create OHLC from price series with realistic spread and volatility
-    opens = prices.copy()
-    highs = opens + np.abs(np.random.normal(0, 0.3, periods))
-    lows = opens - np.abs(np.random.normal(0, 0.3, periods))
-    closes = opens + np.random.normal(0, 0.2, periods)
-    
-    # Ensure OHLC consistency (high >= max(open, close), low <= min(open, close))
-    for i in range(periods):
-        high_min = max(opens[i], closes[i])
-        low_max = min(opens[i], closes[i])
-        highs[i] = max(highs[i], high_min)
-        lows[i] = min(lows[i], low_max)
-    
-    # Generate realistic volume data
-    volumes = np.random.lognormal(mean=2.0, sigma=0.5, size=periods)
-    
-    # Create order book data (5 levels each side)
-    order_book_data = {}
-    
-    # Generate bid side (below mid price)
-    for level in range(1, 6):
-        spread_offset = level * 0.1  # Increasing spread by level
-        bid_prices = closes - spread_offset
-        bid_volumes = np.random.exponential(scale=100.0, size=periods)
-        
-        order_book_data[f'bid_price_{level}'] = bid_prices.astype(np.float32)
-        order_book_data[f'bid_volume_{level}'] = bid_volumes.astype(np.float32)
-    
-    # Generate ask side (above mid price)
-    for level in range(1, 6):
-        spread_offset = level * 0.1  # Increasing spread by level
-        ask_prices = closes + spread_offset
-        ask_volumes = np.random.exponential(scale=100.0, size=periods)
-        
-        order_book_data[f'ask_price_{level}'] = ask_prices.astype(np.float32)
-        order_book_data[f'ask_volume_{level}'] = ask_volumes.astype(np.float32)
-    
-    # Construct the complete DataFrame
-    data = {
-        'open': opens.astype(np.float32),
-        'high': highs.astype(np.float32),
-        'low': lows.astype(np.float32),
-        'close': closes.astype(np.float32),
-        'volume': volumes.astype(np.float32),
-        **order_book_data
-    }
-    
-    df = pd.DataFrame(data, index=index)
-    
-    # Ensure no NaN values
-    df = df.fillna(method='ffill').fillna(method='bfill')
-    
-    return df
-
-
-@pytest.fixture(scope='session')
-def sample_data_df() -> pd.DataFrame:
-    """
-    Generate sample OHLCV and order book data for testing feature functions.
     """
     periods = 100
     start_time = datetime(2024, 1, 1, 9, 30, 0, tzinfo=timezone.utc)
@@ -132,7 +50,8 @@ def sample_data_df() -> pd.DataFrame:
         'bid': (closes - 0.05).astype(np.float32),
         'ask': (closes + 0.05).astype(np.float32),
         'volume': volumes.astype(np.float32),
-        'bid_volume': volumes.astype(np.float32)  # Add missing bid_volume
+        'bid_volume': volumes.astype(np.float32),  # Add missing bid_volume
+        'ask_volume': volumes.astype(np.float32)   # Add missing ask_volume
     }
     
     # Add order book data
@@ -160,6 +79,25 @@ def sample_price_series(sample_data_df: pd.DataFrame) -> pd.Series:
     """
     return sample_data_df['close']
 
+@pytest.fixture(scope='session') 
+def sample_tick_data() -> pd.DataFrame:
+    """Generate sample tick data for testing."""
+    periods = 10
+    start_time = datetime(2024, 1, 1, 9, 30, 0, tzinfo=timezone.utc)
+    index = pd.date_range(start=start_time, periods=periods, freq='1s', tz='UTC')
+    
+    np.random.seed(42)
+    base_price = 2000.0
+    prices = [base_price + i * 0.1 for i in range(periods)]
+    
+    return pd.DataFrame({
+        'timestamp': [ts.isoformat() for ts in index],
+        'bid': [p - 0.05 for p in prices],
+        'ask': [p + 0.05 for p in prices], 
+        'volume': [100.0 + i * 10 for i in range(periods)],
+        'bid_volume': [50.0 + i * 5 for i in range(periods)],
+        'ask_volume': [50.0 + i * 5 for i in range(periods)]
+    })
 
 @pytest.fixture
 def market_data_small() -> pd.DataFrame:

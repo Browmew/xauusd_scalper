@@ -17,17 +17,23 @@ class TestDataLoader:
     """Test suite for DataLoader component."""
     
     @pytest.fixture
-    def sample_tick_data(self) -> pd.DataFrame:
-        """Create sample tick data for testing."""
+    def sample_l2_data(self) -> pd.DataFrame:
+        """Create sample L2 order book data for testing."""
         base_time = datetime(2024, 1, 1, 9, 0, 0)
-        timestamps = [base_time + timedelta(seconds=i) for i in range(10)]
+        timestamps = [base_time + timedelta(seconds=i * 5) for i in range(5)]
         
-        return pd.DataFrame({
+        data = {
             'timestamp': [ts.isoformat() for ts in timestamps],
-            'bid': [2000.0 + i * 0.1 for i in range(10)],
-            'ask': [2000.1 + i * 0.1 for i in range(10)],
-            'volume': [100 + i * 10 for i in range(10)]
-        })
+        }
+        
+        # Add 5 levels of bid/ask prices and volumes
+        for level in range(1, 6):
+            data[f'bid_price_{level}'] = [2000.0 - level * 0.1 + i * 0.1 for i in range(5)]
+            data[f'ask_price_{level}'] = [2000.1 + level * 0.1 + i * 0.1 for i in range(5)]
+            data[f'bid_volume_{level}'] = [1000 + level * 100 + i * 100 for i in range(5)]
+            data[f'ask_volume_{level}'] = [1100 + level * 100 + i * 100 for i in range(5)]
+        
+        return pd.DataFrame(data)
     
     @pytest.fixture
     def sample_l2_data(self) -> pd.DataFrame:

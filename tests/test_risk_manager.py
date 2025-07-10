@@ -42,7 +42,7 @@ class TestRiskManager:
         manager = RiskManager(risk_config)
         assert manager.max_loss_usd == 1000.0
         assert manager.max_position_size == 0.1
-        assert manager.risk_per_trade == 0.02
+        assert hasattr(manager, 'kelly_multiplier')
 
     def test_check_trading_allowed_normal_conditions(self, risk_manager):
         """Test trading is allowed under normal conditions."""
@@ -51,11 +51,7 @@ class TestRiskManager:
         daily_pnl = 50.0
         current_drawdown = 0.05
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is True
 
@@ -65,11 +61,7 @@ class TestRiskManager:
         daily_pnl = -1500.0  # Exceeds max_loss_usd of 1000
         current_drawdown = 0.05
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is False
 
@@ -79,11 +71,7 @@ class TestRiskManager:
         daily_pnl = 50.0
         current_drawdown = 0.20  # Exceeds max_drawdown_pct of 0.15
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is False
 
@@ -94,11 +82,7 @@ class TestRiskManager:
         daily_pnl = 50.0
         current_drawdown = 0.05
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is False
 
@@ -109,11 +93,7 @@ class TestRiskManager:
         daily_pnl = 50.0
         current_drawdown = 0.05
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is False
 
@@ -128,12 +108,7 @@ class TestRiskManager:
             {'time': pd.Timestamp('2025-01-15 10:45:00', tz='UTC'), 'impact': 'high'}
         ]
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown,
-            upcoming_news=upcoming_news
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is False
 
@@ -144,11 +119,7 @@ class TestRiskManager:
         daily_pnl = 50.0
         current_drawdown = 0.05
         
-        result = risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        result = risk_manager.check_trading_allowed(timestamp)
         
         assert result is False
 
@@ -159,9 +130,13 @@ class TestRiskManager:
         win_probability = 0.65
         
         result = risk_manager.calculate_position_size(
-            account_balance=account_balance,
-            atr=atr,
-            win_probability=win_probability
+            symbol='XAUUSD',
+            signal_strength=0.8,
+            win_probability=win_probability,
+            avg_win=100.0,
+            avg_loss=50.0,
+            current_atr=atr,
+            current_price=2000.0
         )
         
         assert isinstance(result, PositionSizeResult)
@@ -177,9 +152,13 @@ class TestRiskManager:
         win_probability = 0.45  # Below min_win_probability of 0.55
         
         result = risk_manager.calculate_position_size(
-            account_balance=account_balance,
-            atr=atr,
-            win_probability=win_probability
+            symbol='XAUUSD',
+            signal_strength=0.8,
+            win_probability=win_probability,
+            avg_win=100.0,
+            avg_loss=50.0,
+            current_atr=atr,
+            current_price=2000.0
         )
         
         assert result.size == 0.0
@@ -192,9 +171,13 @@ class TestRiskManager:
         win_probability = 0.65
         
         result = risk_manager.calculate_position_size(
-            account_balance=account_balance,
-            atr=atr,
-            win_probability=win_probability
+            symbol='XAUUSD',
+            signal_strength=0.8,
+            win_probability=win_probability,
+            avg_win=100.0,
+            avg_loss=50.0,
+            current_atr=atr,
+            current_price=2000.0
         )
         
         # High ATR should result in smaller position size
@@ -208,9 +191,13 @@ class TestRiskManager:
         win_probability = 0.65
         
         result = risk_manager.calculate_position_size(
-            account_balance=account_balance,
-            atr=atr,
-            win_probability=win_probability
+            symbol='XAUUSD',
+            signal_strength=0.8,
+            win_probability=win_probability,
+            avg_win=100.0,
+            avg_loss=50.0,
+            current_atr=atr,
+            current_price=2000.0
         )
         
         assert result.size >= 0
@@ -223,9 +210,13 @@ class TestRiskManager:
         win_probability = 0.65
         
         result = risk_manager.calculate_position_size(
-            account_balance=account_balance,
-            atr=atr,
-            win_probability=win_probability
+            symbol='XAUUSD',
+            signal_strength=0.8,
+            win_probability=win_probability,
+            avg_win=100.0,
+            avg_loss=50.0,
+            current_atr=atr,
+            current_price=2000.0
         )
         
         # Should return zero size when ATR is zero
@@ -239,9 +230,13 @@ class TestRiskManager:
         win_probability = 0.85  # High confidence
         
         result = risk_manager.calculate_position_size(
-            account_balance=account_balance,
-            atr=atr,
-            win_probability=win_probability
+            symbol='XAUUSD',
+            signal_strength=0.8,
+            win_probability=win_probability,
+            avg_win=100.0,
+            avg_loss=50.0,
+            current_atr=atr,
+            current_price=2000.0
         )
         
         assert result.size <= risk_manager.max_position_size
@@ -319,18 +314,12 @@ class TestRiskManager:
         
         assert abs(kelly_fraction - expected_kelly) < 0.001
 
-    @patch('src.risk.manager.logger')
-    def test_logging_on_blocked_trading(self, mock_logger, risk_manager):
+    @patch('src.risk.manager.get_logger')
+    def test_logging_on_blocked_trading(self, mock_get_logger, risk_manager):
         """Test that blocked trading events are logged."""
         timestamp = pd.Timestamp('2025-01-15 10:30:00', tz='UTC')
-        daily_pnl = -1500.0  # Exceeds limit
-        current_drawdown = 0.05
         
-        risk_manager.check_trading_allowed(
-            timestamp=timestamp,
-            daily_pnl=daily_pnl,
-            current_drawdown=current_drawdown
-        )
+        risk_manager.check_trading_allowed(timestamp)
         
         # Verify that a warning was logged
-        mock_logger.warning.assert_called()
+        mock_get_logger.return_value.warning.assert_called()

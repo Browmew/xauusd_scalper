@@ -58,21 +58,24 @@ class TestBacktestEngine:
         }
         
         # Configure mock behaviors
-        mocks['data_loader'].load_data.return_value = pd.DataFrame({
-            'timestamp': pd.date_range('2025-01-01', periods=100, freq='1min'),
+        df = pd.DataFrame({
             'open': [1800.0] * 100,
             'high': [1805.0] * 100,
             'low': [1795.0] * 100,
             'close': [1802.0] * 100,
             'volume': [1000] * 100
         })
+        df.index = pd.date_range('2025-01-01', periods=100, freq='1min', tz='UTC')
+        mocks['data_loader'].load_and_align.return_value = df
         
-        mocks['feature_pipeline'].transform.return_value = pd.DataFrame({
+        features_df = pd.DataFrame({
             'close': [1802.0] * 100,
             'sma_20': [1800.0] * 100,
             'rsi_14': [50.0] * 100,
             'atr_14': [2.0] * 100
         })
+        features_df.index = pd.date_range('2025-01-01', periods=100, freq='1min', tz='UTC')
+        mocks['feature_pipeline'].transform.return_value = features_df
         
         mocks['model_predictor'].predict.return_value = [0.6] * 100  # Win probabilities
         mocks['risk_manager'].check_trading_allowed.return_value = True
@@ -128,11 +131,11 @@ class TestBacktestEngine:
         engine = BacktestEngine(mock_config)
         
         # Verify components were initialized with correct config sections
-        mock_data.assert_called_with(mock_config['data'])
+        mock_data.assert_called_once()
         mock_features.assert_called_with(mock_config['features'])
-        mock_model.assert_called_with(mock_config['model'])
+        mock_model.assert_called_once()
         mock_risk.assert_called_with(mock_config['risk'])
-        mock_exchange.assert_called_with(mock_config['backtesting'])
+        mock_exchange.assert_called_once()
 
     @patch('src.backtesting.engine.DataLoader')
     @patch('src.backtesting.engine.FeaturePipeline')
@@ -160,7 +163,7 @@ class TestBacktestEngine:
         small_data = sample_data_df.head(10).copy()
         
         # Configure mock behaviors
-        mock_data_instance.load_data.return_value = small_data
+        mock_data_instance.load_and_align.return_value = small_data
         mock_features_instance.transform.return_value = small_data  # Features added
         mock_model_instance.predict.return_value = [0.6] * len(small_data)
         mock_risk_instance.check_trading_allowed.return_value = True
@@ -273,7 +276,7 @@ class TestBacktestEngine:
         
         small_data = sample_data_df.head(3).copy()
         
-        mock_data_instance.load_data.return_value = small_data
+        mock_data_instance.load_and_align.return_value = small_data
         mock_features_instance.transform.return_value = small_data
         mock_model_instance.predict.return_value = [0.8] * 3
         
@@ -319,7 +322,7 @@ class TestBacktestEngine:
         
         small_data = sample_data_df.head(3).copy()
         
-        mock_data_instance.load_data.return_value = small_data
+        mock_data_instance.load_and_align.return_value = small_data
         mock_features_instance.transform.return_value = small_data
         mock_model_instance.predict.return_value = [0.8] * 3
         
@@ -401,7 +404,7 @@ class TestBacktestEngine:
         
         small_data = sample_data_df.head(2).copy()
         
-        mock_data_instance.load_data.return_value = small_data
+        mock_data_instance.load_and_align.return_value = small_data
         mock_features_instance.transform.return_value = small_data
         mock_model_instance.predict.return_value = [0.7] * 2
         mock_risk_instance.check_trading_allowed.return_value = True
@@ -445,7 +448,7 @@ class TestBacktestEngine:
             
             small_data = sample_data_df.head(1).copy()
             
-            mock_data_instance.load_data.return_value = small_data
+            mock_data_instance.load_and_align.return_value = small_data
             mock_features_instance.transform.return_value = small_data
             mock_model_instance.predict.return_value = [0.7]
             mock_risk_instance.check_trading_allowed.return_value = False

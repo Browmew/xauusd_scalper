@@ -82,6 +82,7 @@ class RiskManager:
         
         # Check news blackout
         if self._check_news_blackout(timestamp, upcoming_news):
+            self.logger.warning("Trading blocked due to news blackout")
             return False
         
         return True
@@ -104,6 +105,13 @@ class RiskManager:
                 atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
             )
         
+        # Check minimum win probability
+        if win_probability < getattr(self, 'min_win_probability', 0.55):
+            return PositionSizeResult(
+                size=0.0, reason="Win probability below minimum threshold", max_allowed=0.0, kelly_fraction=0.0,
+                atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
+            )
+        
         # Calculate Kelly fraction
         win_loss_ratio = avg_win / avg_loss
         kelly_fraction = (win_probability * win_loss_ratio - (1 - win_probability)) / win_loss_ratio
@@ -117,7 +125,7 @@ class RiskManager:
         
         # Calculate position size based on risk per trade
         risk_amount = self.current_balance * self.risk_per_trade
-        position_value = risk_amount / atr_stop_distance
+        position_value = risk_amount / stop_loss_pct
         
         # Apply limits
         max_allowed = min(self.max_position_size, self.current_balance * 0.1)
@@ -144,6 +152,10 @@ class RiskManager:
         if not self.allowed_sessions:
             return True
         
+        # Check weekends first
+        if timestamp.weekday() >= 5:  # Saturday=5, Sunday=6
+            return False
+        
         current_time = timestamp.time()
         
         # Check each session in the list
@@ -160,10 +172,6 @@ class RiskManager:
                     if current_time >= start_time or current_time <= end_time:
                         return True
         
-        # Check weekends
-        if timestamp.weekday() >= 5:  # Saturday=5, Sunday=6
-            return False
-        
         return False
 
     def _check_news_blackout(self, timestamp: datetime, upcoming_news: List) -> bool:
@@ -175,7 +183,12 @@ class RiskManager:
             news_time = news.get('time')
             if isinstance(news_time, str):
                 news_time = pd.to_datetime(news_time)
+            elif isinstance(news_time, pd.Timestamp):
+                pass  # Already correct type
+            else:
+                continue  # Skip invalid news entries
             
+            # Calculate time difference in minutes
             time_diff = abs((news_time - timestamp).total_seconds() / 60)
             if time_diff <= self.news_blackout_minutes:
                 return True

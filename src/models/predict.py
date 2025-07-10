@@ -99,7 +99,7 @@ class ModelPredictor:
         
         # Load metadata - rest stays the same
         metadata_path = model_path_obj.parent / (model_path_obj.stem + '_metadata.json')
-        
+
         if not metadata_path.exists():
             self.logger.warning(f"Model metadata not found: {metadata_path}")
             self.metadata = {
@@ -109,7 +109,7 @@ class ModelPredictor:
             self.feature_names = []
             self.model_type = 'unknown'
             return
-        
+
         try:
             with open(metadata_path, 'r') as f:
                 self.metadata = json.load(f)

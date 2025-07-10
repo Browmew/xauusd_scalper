@@ -35,21 +35,6 @@ class TestDataLoader:
         
         return pd.DataFrame(data)
     
-    @pytest.fixture
-    def sample_l2_data(self) -> pd.DataFrame:
-        """Create sample L2 order book data for testing."""
-        base_time = datetime(2024, 1, 1, 9, 0, 0)
-        # L2 data every 5 seconds (less frequent than tick data)
-        timestamps = [base_time + timedelta(seconds=i * 5) for i in range(5)]
-        
-        return pd.DataFrame({
-            'timestamp': [ts.isoformat() for ts in timestamps],
-            'bid_depth_1': [2000.0 + i * 0.1 for i in range(5)],
-            'ask_depth_1': [2000.1 + i * 0.1 for i in range(5)],
-            'bid_volume_1': [1000 + i * 100 for i in range(5)],
-            'ask_volume_1': [1100 + i * 100 for i in range(5)]
-        })
-    
     def create_test_files(self, tmp_path: Path, tick_data: pd.DataFrame, l2_data: pd.DataFrame) -> tuple[Path, Path]:
         """Create temporary gzipped CSV files for testing."""
         tick_file = tmp_path / "tick_data.csv.gz"
@@ -89,8 +74,8 @@ class TestDataLoader:
         # Verify columns from both datasets are present
         assert 'bid' in result_df.columns
         assert 'ask' in result_df.columns
-        assert 'bid_depth_1' in result_df.columns
-        assert 'ask_depth_1' in result_df.columns
+        assert 'bid_price_1' in result_df.columns
+        assert 'ask_price_1' in result_df.columns
         
         # Verify timestamp alignment worked
         assert pd.api.types.is_datetime64_any_dtype(result_df.index)
@@ -107,15 +92,15 @@ class TestDataLoader:
         result_df = loader.load_and_align(str(tick_file), str(l2_file))
         
         # First tick should align with first L2 record
-        assert result_df.iloc[0]['bid_depth_1'] == sample_l2_data.iloc[0]['bid_depth_1']
+        assert result_df.iloc[0]['bid_price_1'] == sample_l2_data.iloc[0]['bid_price_1']
         
         # Tick at 3 seconds should still use L2 from 0 seconds (backward fill)
         tick_3s_idx = 3
-        assert result_df.iloc[tick_3s_idx]['bid_depth_1'] == sample_l2_data.iloc[0]['bid_depth_1']
+        assert result_df.iloc[tick_3s_idx]['bid_price_1'] == sample_l2_data.iloc[0]['bid_price_1']
         
         # Tick at 7 seconds should use L2 from 5 seconds
         tick_7s_idx = 7
-        assert result_df.iloc[tick_7s_idx]['bid_depth_1'] == sample_l2_data.iloc[1]['bid_depth_1']
+        assert result_df.iloc[tick_7s_idx]['bid_price_1'] == sample_l2_data.iloc[1]['bid_price_1']
     
     def test_load_empty_files(self, tmp_path: Path):
         """Test handling of empty CSV files."""
@@ -126,7 +111,7 @@ class TestDataLoader:
         l2_file = tmp_path / "empty_l2.csv.gz"
         
         empty_df = pd.DataFrame(columns=['timestamp', 'bid', 'ask', 'volume'])
-        empty_l2_df = pd.DataFrame(columns=['timestamp', 'bid_depth_1', 'ask_depth_1', 'bid_volume_1', 'ask_volume_1'])
+        empty_l2_df = pd.DataFrame(columns=['timestamp', 'bid_price_1', 'ask_price_1', 'bid_volume_1', 'ask_volume_1'])
         
         with gzip.open(tick_file, 'wt', encoding='utf-8') as f:
             empty_df.to_csv(f, index=False)
@@ -159,8 +144,8 @@ class TestDataLoader:
         l2_file = tmp_path / "valid_l2.csv.gz"
         sample_l2 = pd.DataFrame({
             'timestamp': ['2024-01-01T09:00:00'],
-            'bid_depth_1': [2000.0],
-            'ask_depth_1': [2000.1],
+            'bid_price_1': [2000.0],
+            'ask_price_1': [2000.1],
             'bid_volume_1': [1000],
             'ask_volume_1': [1100]
         })
@@ -190,8 +175,8 @@ class TestDataLoader:
         
         l2_data = pd.DataFrame({
             'timestamp': ['2024-01-01T09:00:00.000Z'],
-            'bid_depth_1': [2000.0],
-            'ask_depth_1': [2000.1],
+            'bid_price_1': [2000.0],
+            'ask_price_1': [2000.1],
             'bid_volume_1': [1000],
             'ask_volume_1': [1100]
         })
@@ -226,8 +211,8 @@ class TestDataLoader:
         
         large_l2_data = pd.DataFrame({
             'timestamp': [ts.isoformat() for ts in l2_timestamps],
-            'bid_depth_1': [2000.0 + i * 0.1 for i in range(100)],
-            'ask_depth_1': [2000.1 + i * 0.1 for i in range(100)],
+            'bid_price_1': [2000.0 + i * 0.1 for i in range(100)],
+            'ask_price_1': [2000.1 + i * 0.1 for i in range(100)],
             'bid_volume_1': [1000 + i * 10 for i in range(100)],
             'ask_volume_1': [1100 + i * 10 for i in range(100)]
         })

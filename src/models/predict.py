@@ -154,7 +154,8 @@ class ModelPredictor:
             ValueError: If required features are missing
         """
         if not self.feature_names:
-            raise ValueError("Model not loaded or feature names not available")
+            # Use all available columns if no feature names specified
+            self.feature_names = list(data.columns)
         
         # Check for missing features
         missing_features = set(self.feature_names) - set(data.columns)

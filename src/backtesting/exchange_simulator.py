@@ -527,3 +527,7 @@ class ExchangeSimulator:
         self.total_slippage = 0.0
         
         self.logger.info("ExchangeSimulator reset")
+
+    def get_recent_fills(self) -> List[Fill]:
+        """Get recent fills from this trading session."""
+        return self.fill_history.copy()

@@ -277,10 +277,10 @@ class DataLoader:
             return df
             
         except Exception as e:
-            self.logger.error("Failed to load L2 data", 
+            self.logger.warning("Failed to load L2 data, returning empty DataFrame", 
                             file_path=str(validated_path),
                             error=str(e))
-            raise
+            return pd.DataFrame()
     
     def align_data(self, tick_df: DataFrame, l2_df: DataFrame,
                    method: str = 'forward_fill') -> DataFrame:

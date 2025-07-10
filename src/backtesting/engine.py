@@ -221,9 +221,9 @@ class BacktestEngine:
                 self.market_data.index = self.market_data.index.tz_localize('UTC')
             
             # Filter by date range if specified - handle fractional seconds
-            if self.config.start_date and self.config.end_date:
-                start_date = pd.to_datetime(self.config.start_date, format='mixed', utc=True, errors='coerce')
-                end_date = pd.to_datetime(self.config.end_date, format='mixed', utc=True, errors='coerce')
+            if hasattr(self.config, 'start_date') and hasattr(self.config, 'end_date'):
+                start_date = pd.to_datetime(self.config.start_date, utc=True)
+                end_date = pd.to_datetime(self.config.end_date, utc=True)
                 
                 if start_date.tz is None:
                     start_date = start_date.tz_localize('UTC')
@@ -281,7 +281,7 @@ class BacktestEngine:
             # Always try to generate features and process signals after minimum buffer
             # Trigger the pipeline as soon as we have at least 5 ticks
             # or 5 % of the configured look-back window, whichever is larger.
-            min_buffer = max(3, self.config.lookback_window // 50)
+            min_buffer = max(10, self.config.lookback_window // 10)
             if len(self.state.feature_buffer) >= min_buffer:
 
                 try:
@@ -549,6 +549,7 @@ class BacktestEngine:
                 
                 # Update state
                 self.state.total_pnl += fill_pnl
+                self.state.current_balance = self.config.initial_balance + self.state.total_pnl
                 self.state.total_commission += fill.commission
                 
                 if fill_pnl > 0:

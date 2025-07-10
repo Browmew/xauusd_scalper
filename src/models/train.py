@@ -580,7 +580,7 @@ class ModelTrainer:
         and persist both the model and the exact feature-name order.
         Returns the pathlib.Path to the saved .pkl file.
         """
-        self.logger.info("Training RandomForestRegressor", n_estimators=n_estimators)
+        self.logger.info(f"Training RandomForestRegressor with n_estimators={n_estimators}")
 
         model = RandomForestRegressor(
             n_estimators=n_estimators,
@@ -596,7 +596,7 @@ class ModelTrainer:
         feature_path = model_path.with_name(model_path.stem + "_features.json")
         feature_path.write_text(json.dumps(list(X.columns)))
 
-        self.logger.info("Random-Forest saved", model_path=model_path, feature_path=feature_path)
+        self.logger.info(f"Random-Forest saved to {model_path}")
         return model_path
 
     

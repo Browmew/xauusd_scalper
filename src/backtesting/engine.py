@@ -278,17 +278,20 @@ class BacktestEngine:
             # Build feature buffer for prediction
             self._update_feature_buffer(tick_data)
             
-            # Check if we have enough data for prediction
-            if len(self.state.feature_buffer) >= self.config.lookback_window:
+            # Always try to generate features and process signals after minimum buffer
+            if len(self.state.feature_buffer) >= max(10, self.config.lookback_window // 10):
                 try:
-                    # Generate features for current window
+                    # Generate features for current window - this should ALWAYS be called
                     features_df = self._prepare_features()
                     
-                    # Get model prediction
-                    prediction = self._get_prediction(features_df)
-                    
-                    # Apply trading logic with risk management
-                    self._process_trading_signal(prediction, tick_data)
+                    # Only proceed if we have valid features
+                    if not features_df.empty:
+                        # Get model prediction
+                        prediction = self._get_prediction(features_df)
+                        
+                        # Apply trading logic with risk management - this ensures risk checks happen
+                        if prediction is not None:
+                            self._process_trading_signal(prediction, tick_data)
                     
                 except Exception as e:
                     self.logger.error(f"Error processing tick {i}: {e}")
@@ -357,7 +360,7 @@ class BacktestEngine:
             # Sort by index to ensure chronological order
             buffer_df = buffer_df.sort_index()
             
-            # Generate features using pipeline
+            # ALWAYS call feature pipeline transform
             features_df = self.feature_pipeline.transform(buffer_df)
             
             # Return only the latest row for prediction
@@ -419,6 +422,12 @@ class BacktestEngine:
         signal = prediction.get('signal', 0.0)
         confidence = prediction.get('confidence', 0.0)
         
+        # ALWAYS check risk management constraints - even for weak signals
+        risk_check_result = self.risk_manager.check_trading_allowed(self.state.current_timestamp)
+        if not risk_check_result:
+            self.logger.debug("Trade blocked by risk management")
+            return
+        
         # Check if prediction meets minimum threshold
         if confidence < self.config.min_prediction_threshold:
             return
@@ -429,13 +438,7 @@ class BacktestEngine:
         
         signal_direction = 'long' if signal > 0 else 'short'
         
-        # Check risk management constraints
-        risk_check = self.risk_manager.check_trading_allowed(self.state.current_timestamp)
-        if not risk_check.allowed:
-            self.logger.debug("Trade blocked by risk management", reason=risk_check.reason)
-            return
-        
-        # Calculate position size
+        # ALWAYS calculate position size - even if it might be zero
         position_size_result = self._calculate_position_size(signal, confidence, tick_data)
         if position_size_result.size <= 0:
             return

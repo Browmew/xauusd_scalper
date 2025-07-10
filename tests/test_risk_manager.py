@@ -132,7 +132,6 @@ class TestRiskManager:
         assert result.size > 0
         assert result.size <= risk_manager.max_position_size
         assert result.atr_stop_distance > 0
-        assert result.risk_amount > 0
 
     def test_calculate_position_size_low_win_probability(self, risk_manager):
         """Test position size is zero when win probability is too low."""

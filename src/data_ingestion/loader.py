@@ -200,7 +200,7 @@ class DataLoader:
             raise
     
     def load_l2_data(self, file_path: str, 
-                     chunksize: Optional[int] = None) -> DataFrame:
+                    chunksize: Optional[int] = None) -> DataFrame:
         """
         Load Level 2 order book data from compressed CSV file.
         
@@ -236,7 +236,6 @@ class DataLoader:
                 chunks = []
                 chunk_reader = pd.read_csv(
                     validated_path,
-                    dtype=self.l2_dtypes,
                     engine='pyarrow',
                     compression=compression,
                     chunksize=chunksize,
@@ -245,6 +244,10 @@ class DataLoader:
                 
                 for chunk_num, chunk in enumerate(chunk_reader):
                     self.logger.debug("Processing L2 chunk", chunk_num=chunk_num)
+                    # Only apply dtypes for columns that exist
+                    for col, dtype in self.l2_dtypes.items():
+                        if col in chunk.columns and col != 'timestamp':
+                            chunk[col] = chunk[col].astype(dtype)
                     chunk = self._optimize_timestamp_column(chunk)
                     chunks.append(chunk)
                 
@@ -252,21 +255,24 @@ class DataLoader:
             else:
                 df = pd.read_csv(
                     validated_path,
-                    dtype=self.l2_dtypes,
                     engine='pyarrow',
                     compression=compression,
                     parse_dates=False
                 )
+                # Only apply dtypes for columns that exist
+                for col, dtype in self.l2_dtypes.items():
+                    if col in df.columns and col != 'timestamp':
+                        df[col] = df[col].astype(dtype)
                 df = self._optimize_timestamp_column(df)
             
             # Remove any duplicate timestamps (keep last)
             df = df[~df.index.duplicated(keep='last')]
             
             self.logger.info("L2 data loaded successfully", 
-                           rows=len(df),
-                           memory_mb=df.memory_usage(deep=True).sum() / 1024**2,
-                           start_time=df.index.min(),
-                           end_time=df.index.max())
+                        rows=len(df),
+                        memory_mb=df.memory_usage(deep=True).sum() / 1024**2,
+                        start_time=df.index.min() if len(df) > 0 else None,
+                        end_time=df.index.max() if len(df) > 0 else None)
             
             return df
             

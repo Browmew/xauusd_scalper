@@ -98,15 +98,16 @@ class RiskManager:
                 atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
             )
         
-        # Handle zero ATR specifically
+        # Handle zero ATR specifically - MUST come before other calculations
         if current_atr <= 0:
             return PositionSizeResult(
                 size=0.0, reason="ATR too low or zero", max_allowed=0.0, kelly_fraction=0.0,
                 atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
             )
         
-        # Check minimum win probability
-        if win_probability < getattr(self, 'min_win_probability', 0.55):
+        # Check minimum win probability BEFORE any other calculations
+        min_win_prob = getattr(self, 'min_win_probability', 0.55)
+        if win_probability < min_win_prob:
             return PositionSizeResult(
                 size=0.0, reason="Win probability below minimum threshold", max_allowed=0.0, kelly_fraction=0.0,
                 atr_stop_distance=0.0, stop_loss_distance=0.0, risk_amount=0.0
@@ -115,6 +116,13 @@ class RiskManager:
         # Calculate Kelly fraction
         win_loss_ratio = avg_win / avg_loss
         kelly_fraction = (win_probability * win_loss_ratio - (1 - win_probability)) / win_loss_ratio
+        
+        # If Kelly is negative or very small, return zero position
+        if kelly_fraction <= 0:
+            return PositionSizeResult(
+                size=0.0, reason="Negative Kelly fraction - no position", max_allowed=0.0, kelly_fraction=kelly_fraction,
+                atr_stop_distance=current_atr * self.atr_stop_multiplier, stop_loss_distance=0.0, risk_amount=0.0
+            )
         
         # Apply Kelly multiplier and signal strength
         adjusted_kelly = kelly_fraction * self.kelly_multiplier * signal_strength
@@ -131,16 +139,13 @@ class RiskManager:
         max_allowed = min(self.max_position_size, self.current_balance * 0.1)
         final_size = max(0.0, min(position_value, max_allowed))
         
-        # Ensure minimum size if calculated size is too small
+        # Ensure minimum size if calculated size is too small but not zero
         if final_size > 0 and final_size < self.min_position_size:
             final_size = self.min_position_size
         
         reason = "Kelly-based sizing with ATR stops"
         if final_size == max_allowed:
             reason = "Limited by maximum position size"
-        elif adjusted_kelly <= 0:
-            final_size = 0.0
-            reason = "Negative Kelly fraction - no position"
         
         return PositionSizeResult(
             size=final_size, reason=reason, max_allowed=max_allowed, kelly_fraction=adjusted_kelly,
@@ -390,66 +395,43 @@ class RiskManager:
             atr_stop_distance=atr_stop_distance
         )
     
-    def check_trading_allowed(self, timestamp: datetime, symbol: str = "XAUUSD") -> RiskCheckResult:
-        """Comprehensive check if trading is allowed at given timestamp."""
+    def check_trading_allowed(self, timestamp: datetime = None, daily_pnl: float = None, 
+                            current_drawdown: float = None, upcoming_news: List = None) -> bool:
+        """Check if trading is allowed at given timestamp."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        if daily_pnl is None:
+            daily_pnl = self.daily_pnl
+        if current_drawdown is None:
+            current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance if self.peak_balance > 0 else 0
+        if upcoming_news is None:
+            upcoming_news = []
+        
         # Reset daily state if new day
         self.reset_daily_state(timestamp)
         
-        # Calculate current drawdown
-        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance if self.peak_balance > 0 else 0
-        
         # Check daily loss limit
-        if abs(self.daily_pnl) >= self.max_daily_loss_usd:
-            return RiskCheckResult(
-                allowed=False,
-                reason=f"Daily loss limit exceeded: ${abs(self.daily_pnl):.2f}",
-                current_drawdown=current_drawdown,
-                daily_pnl=self.daily_pnl
-            )
+        if abs(daily_pnl) >= self.max_daily_loss_usd:
+            return False
         
         # Check maximum drawdown
         if current_drawdown >= self.max_drawdown_pct:
-            return RiskCheckResult(
-                allowed=False,
-                reason=f"Maximum drawdown exceeded: {current_drawdown*100:.2f}%",
-                current_drawdown=current_drawdown,
-                daily_pnl=self.daily_pnl
-            )
+            return False
         
         # Check daily trade limit
         if self.daily_trades >= self.max_daily_trades:
-            return RiskCheckResult(
-                allowed=False,
-                reason=f"Daily trade limit exceeded: {self.daily_trades}",
-                current_drawdown=current_drawdown,
-                daily_pnl=self.daily_pnl
-            )
+            return False
         
         # Check session hours
         if not self._is_in_trading_session(timestamp):
-            return RiskCheckResult(
-                allowed=False,
-                reason="Outside allowed trading session",
-                current_drawdown=current_drawdown,
-                daily_pnl=self.daily_pnl
-            )
+            return False
         
         # Check news blackout
-        if self._is_news_blackout_period(timestamp):
-            self.logger.warning("Trading blocked due to news blackout")  # Add logging
-            return RiskCheckResult(
-                allowed=False,
-                reason="News blackout period active",
-                current_drawdown=current_drawdown,
-                daily_pnl=self.daily_pnl
-            )
+        if self._check_news_blackout(timestamp, upcoming_news):
+            self.logger.warning("Trading blocked due to news blackout")
+            return False
         
-        return RiskCheckResult(
-            allowed=True,
-            reason="All risk checks passed",
-            current_drawdown=current_drawdown,
-            daily_pnl=self.daily_pnl
-        )
+        return True
     
     def _is_trading_session_active(self, timestamp: datetime) -> bool:
         """Check if current time is within allowed trading sessions."""

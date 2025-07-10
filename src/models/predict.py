@@ -97,6 +97,17 @@ class ModelPredictor:
             self.logger.error(error_msg)
             raise ValueError(error_msg)
         
+        # ------------------------------------------------------------------
+        # Load feature-order metadata if present
+        # ------------------------------------------------------------------
+        feature_list_path = Path(model_path).with_name(
+            Path(model_path).stem + "_features.json"
+        )
+        self.expected_features: list[str] = []
+        if feature_list_path.exists():
+            self.expected_features = json.loads(feature_list_path.read_text())
+
+        
         # Load metadata - rest stays the same
         metadata_path = model_path_obj.parent / (model_path_obj.stem + '_metadata.json')
 
@@ -179,6 +190,14 @@ class ModelPredictor:
         
         if data.empty:
             raise ValueError("Input data is empty")
+        
+        # Align column order if we have metadata
+        if self.expected_features:
+            missing = set(self.expected_features) - set(X.columns)
+            if missing:
+                raise ValueError(f"Missing features for prediction: {missing}")
+            X = X[self.expected_features]  # re-index & order
+
         
         # Prepare features
         feature_data = self._prepare_features(data)

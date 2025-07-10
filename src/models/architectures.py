@@ -14,6 +14,28 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# ------------------------------------------------------------------ #
+# Quick factory helpers so train.py can import them
+# ------------------------------------------------------------------ #
+def create_lgbm_model(params: dict):
+    import lightgbm as lgb
+    return lgb.LGBMRegressor(**params)
+
+def create_lstm_model(params: dict):
+    # Minimal stub – replace with a real Keras model later if needed
+    import tensorflow as tf
+    model = tf.keras.Sequential(
+        [
+            tf.keras.layers.Input(shape=(params.get("window", 60), params.get("features", 1))),
+            tf.keras.layers.LSTM(params.get("units", 64)),
+            tf.keras.layers.Dense(1),
+        ]
+    )
+    model.compile(optimizer="adam", loss="mse")
+    return model
+
+
+
 def build_lstm_model(
     input_shape: Tuple[int, int],
     lstm_units_1: int = 64,

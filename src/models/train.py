@@ -21,6 +21,11 @@ from tensorflow.keras.optimizers import Adam
 
 from .architectures import create_lgbm_model, create_lstm_model
 
+from sklearn.ensemble import RandomForestRegressor  # new
+import json  # new
+import argparse  # new
+
+
 
 class ModelTrainer:
     """
@@ -559,6 +564,41 @@ class ModelTrainer:
             history_path = self.output_dir / "training_history.pkl"
             joblib.dump(self.training_history, history_path)
             self.logger.info(f"Training history saved to {history_path}")
+
+    # ------------------------------------------------------------------ #
+    # NEW: Random-Forest model that records column order
+    # ------------------------------------------------------------------ #
+    def train_random_forest(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        n_estimators: int = 400,
+        max_depth: int | None = None,
+    ) -> Path:
+        """
+        Train a RandomForestRegressor on a *DataFrame* (columns = feature names)
+        and persist both the model and the exact feature-name order.
+        Returns the pathlib.Path to the saved .pkl file.
+        """
+        self.logger.info("Training RandomForestRegressor", n_estimators=n_estimators)
+
+        model = RandomForestRegressor(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            n_jobs=-1,
+            random_state=42,
+        ).fit(X, y)
+
+        model_path = self.output_dir / "xauusd_rf.pkl"
+        joblib.dump(model, model_path, compress=3)
+
+        # ---- save accompanying feature list --------------------------------
+        feature_path = model_path.with_name(model_path.stem + "_features.json")
+        feature_path.write_text(json.dumps(list(X.columns)))
+
+        self.logger.info("Random-Forest saved", model_path=model_path, feature_path=feature_path)
+        return model_path
+
     
     def load_models(self) -> None:
         """Load previously trained models from disk."""
@@ -599,3 +639,30 @@ class ModelTrainer:
         except Exception as e:
             self.logger.error(f"Error loading models: {e}")
             raise
+
+# ---------------------------------------------------------------------- #
+# CLI entry-point – allows: rf | lgbm | xgb
+# ---------------------------------------------------------------------- #
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Model trainer CLI")
+    parser.add_argument("--model", choices=["rf", "lgbm", "xgb"], default="rf",
+                        help="Which model to train")
+    parser.add_argument("--config", type=str, default="configs/model_config.yml",
+                        help="Path to model-training config (YAML)")
+    args = parser.parse_args()
+
+    # ---- Load data ----------------------------------------------------
+    # Replace these two lines with your real data-loading helper
+    X = pd.read_parquet("data/processed/features/train_features.parquet")
+    y = pd.read_csv("data/processed/labels/train_labels.csv")["target"]
+
+    trainer = ModelTrainer(config_path=args.config)
+
+    if args.model == "rf":
+        trainer.train_random_forest(X, y)
+    elif args.model == "lgbm":
+        trainer.train_lightgbm(X, y)        # existing method
+    elif args.model == "xgb":
+        trainer.train_xgboost(X, y)         # existing method
+    else:
+        raise ValueError("Unsupported model type")

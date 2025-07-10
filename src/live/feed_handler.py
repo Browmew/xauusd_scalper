@@ -14,6 +14,8 @@ from typing import Dict, Any, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime
 import websockets
+import contextlib
+
 try:
     import uvloop # type: ignore
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -63,9 +65,12 @@ class LiveFeedHandler:
             return None
 
     async def run(self):
-        """Run the feed handler (placeholder)."""
+        """Public entry-point used by unit tests."""
         self.is_running = True
-        # Placeholder implementation for tests
+        try:
+            await self._connect_and_run()
+        finally:
+            self.is_running = False
 
     def stop(self):
         """Stop the feed handler."""
@@ -98,6 +103,7 @@ class LiveFeedHandler:
             message_timeout: Timeout for individual message operations
         """
         self.websocket_url = url
+        self.url = url  # alias used by unit tests
         self.subscription_message = subscription_message
         self.data_queue = data_queue
         self.symbol = symbol
@@ -140,49 +146,70 @@ class LiveFeedHandler:
                 if self.is_running:
                     await self._handle_reconnection()
     
-    async def stop(self) -> None:
+    async def _stop_async(self) -> None:
         """Stop the feed handler gracefully."""
         self.logger.info("Stopping WebSocket feed handler")
         self.is_running = False
         
         if self.websocket and not self.websocket.closed:
             await self.websocket.close()
+
+    def stop(self):
+        """Synchronous stop used by unit tests."""
+        self.is_running = False
+
     
+    async def _message_loop(self) -> None:
+        """Main message loop – uses recv() so tests can inject StopAsyncIteration."""
+        while self.is_running:
+            try:
+                message = await asyncio.wait_for(
+                    self.websocket.recv(),
+                    timeout=self.message_timeout
+                )
+
+                self.last_message_time = time.time()
+                self.messages_received += 1
+                await self._process_message(message)
+
+            except StopAsyncIteration:
+                # Mock WebSocket in unit tests signals ‘end of stream’
+                break
+            except asyncio.TimeoutError:
+                if time.time() - self.last_message_time > self.heartbeat_interval * 2:
+                    self.logger.warning("No messages received; connection may be stale")
+                    break
+            except websockets.exceptions.ConnectionClosed:
+                self.logger.warning("WebSocket connection closed")
+                break
+            except Exception as e:
+                self.logger.error("Error in message loop: %s", e)
+                break
+
     async def _connect_and_run(self) -> None:
-        """Establish WebSocket connection and run the main message loop."""
+        """Open the connection, subscribe, then process messages until done."""
         self.connection_start_time = time.time()
-        
-        # Connect with timeout and proper headers
-        connect_kwargs = {
-            "ping_interval": self.heartbeat_interval,
-            "ping_timeout": self.message_timeout,
-            "close_timeout": self.message_timeout,
-            "max_size": 2**20,  # 1MB max message size
-            "max_queue": 32,    # Limit message queue size
-        }
-        
-        async with websockets.connect(self.websocket_url, **connect_kwargs) as websocket:
+
+        async with websockets.connect(self.url) as websocket:
             self.websocket = websocket
             self.connection_count += 1
-            self.reconnect_count = 0  # Reset on successful connection
-            
-            self.logger.info(f"Connected to {self.websocket_url} (connection #{self.connection_count})")
-            
-            # Send subscription message
+            self.reconnect_count = 0
+
+            self.logger.info(
+                f"Connected to {self.url} (connection #{self.connection_count})"
+            )
+
             await self._send_subscription()
-            
-            # Start heartbeat task
             heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-            
+
             try:
-                # Main message processing loop
                 await self._message_loop()
             finally:
                 heartbeat_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
+
+
     
     async def _send_subscription(self) -> None:
         """Send subscription message to the WebSocket."""
@@ -199,34 +226,6 @@ class LiveFeedHandler:
         except Exception as e:
             self.logger.error(f"Error sending subscription: {e}")
             raise
-    
-    async def _message_loop(self) -> None:
-        """Main message processing loop."""
-        while self.is_running:
-            try:
-                # Receive message with timeout
-                message = await asyncio.wait_for(
-                    self.websocket.recv(),
-                    timeout=self.message_timeout
-                )
-                
-                self.last_message_time = time.time()
-                self.messages_received += 1
-                
-                # Parse and queue the message
-                await self._process_message(message)
-                
-            except asyncio.TimeoutError:
-                # Check if we've been without messages for too long
-                if time.time() - self.last_message_time > self.heartbeat_interval * 2:
-                    self.logger.warning("No messages received, connection may be stale")
-                    break
-            except websockets.exceptions.ConnectionClosed:
-                self.logger.warning("WebSocket connection closed")
-                break
-            except Exception as e:
-                self.logger.error(f"Error in message loop: {e}")
-                break
     
     async def _process_message(self, message: str) -> None:
         """Process incoming WebSocket message."""

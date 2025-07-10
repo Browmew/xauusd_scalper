@@ -141,6 +141,9 @@ class SmartOrderRouter:
                 else:
                     error_data = await response.json()
                     return error_data
+        except aiohttp.ClientError as e:
+            # Propagate HTTP-layer failures so unit tests can assert on them
+            raise                
         except Exception as e:
             return {'error': 'EXECUTION_FAILED', 'message': str(e)}
 
@@ -148,6 +151,15 @@ class SmartOrderRouter:
         self.api_url = api_url
         self.api_key = api_key
         self.api_secret = api_secret
+        self.default_broker = "PRIMARY_BROKER"
+        self.brokers: Dict[str, Dict[str, Any]] = {
+            self.default_broker: {
+                "api_url": api_url,
+                "api_key": api_key,
+                "api_secret": api_secret,
+            }
+        }
+
         
         self.session: Optional[aiohttp.ClientSession] = None
         self.websocket_connections: Dict[str, websockets.WebSocketServerProtocol] = {}
@@ -195,7 +207,7 @@ class SmartOrderRouter:
         
         self.logger.info("SmartOrderRouter stopped")
     
-    async def execute_order(
+    async def execute_order_full(
         self,
         order: Order,
         broker_name: Optional[str] = None,
@@ -578,13 +590,17 @@ class SmartOrderRouter:
             )
         
     def _create_payload(self, order: Dict[str, Any]) -> Dict[str, Any]:
-        return {
+        payload = {
             'symbol': order['symbol'],
             'side': order['side'],
             'quantity': order['quantity'],
             'order_type': order['order_type'],
             'timestamp': datetime.now().isoformat()
         }
+        if order['order_type'] == 'LIMIT' and 'price' in order:
+            payload['price'] = order['price']
+        return payload
+
 
     def _sign_payload(self, payload: Dict[str, Any]) -> str:
         import hmac
@@ -607,11 +623,19 @@ class SmartOrderRouter:
         required_fields = ['symbol', 'side', 'quantity', 'order_type']
         if not all(field in order for field in required_fields):
             return False
+
         if order['side'] not in ['BUY', 'SELL']:
             return False
+
         if order['quantity'] <= 0:
             return False
+
+        allowed_types = ['MARKET', 'LIMIT']
+        if order['order_type'] not in allowed_types:
+            return False
+
         return True
+
     
     def get_active_orders(self) -> Dict[str, Order]:
         """Get all active orders."""

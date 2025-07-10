@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  xauusd-scalper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xauusd_scalper_dev
+    working_dir: /app
+    volumes:
+      # Mount source code for development
+      - ./src:/app/src
+      # Mount configuration files
+      - ./configs:/app/configs
+      # Mount data directories
+      - ./data:/app/data
+      # Mount models directory for persistence
+      - ./models:/app/models
+      # Mount reports directory for output
+      - ./reports:/app/reports
+      # Mount logs directory
+      - ./logs:/app/logs
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    # Override default entrypoint for interactive development
+    entrypoint: ["python", "src/main.py"]
+    # Keep container running for development
+    tty: true
+    stdin_open: true
+
+  # Alternative service for interactive development
+  xauusd-scalper-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xauusd_scalper_interactive
+    working_dir: /app
+    volumes:
+      - ./src:/app/src
+      - ./configs:/app/configs
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    # Override entrypoint for bash access
+    entrypoint: ["/bin/bash"]
+    tty: true
+    stdin_open: true
+    profiles:
+      - dev
+
+# Named volumes for persistent data (optional)
+volumes:
+  models_data:
+  reports_data:

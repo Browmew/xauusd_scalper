@@ -1,0 +1,389 @@
+# XAUUSD Scalping Configuration
+# Production-grade low-latency intraday scalping system
+# Target horizon: 1-15 minutes
+
+# ============================================================================
+# SYSTEM CONFIGURATION
+# ============================================================================
+system:
+  name: "xauusd_scalper"
+  version: "1.0.0"
+  environment: "production"  # development, staging, production
+  timezone: "UTC"
+  random_seed: 42
+  
+# ============================================================================
+# HARDWARE & RUNTIME
+# ============================================================================
+hardware:
+  cpu_cores: 16
+  memory_gb: 64
+  gpu_enabled: true
+  gpu_device: "cuda:0"  # NVIDIA RTX 40-series
+  storage_path: "/mnt/nvme_ssd"  # 4TB NVMe SSD
+  use_numba_jit: true
+  use_uvloop: true
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  symbol: "XAUUSD"
+  
+  # Data sources
+  sources:
+    tick_data: "data/historical/ticks/"
+    l2_orderbook: "data/historical/l2_orderbook/"
+    live_news: "data/live/news_events.csv"
+  
+  # Tick data specifications
+  tick:
+    precision_ms: 1  # Millisecond-precision alignment
+    compression: "gzip"
+    chunk_size: 100000
+    memory_map: true
+  
+  # L2 Order Book
+  l2_orderbook:
+    levels: 5  # 5-level order book imbalance
+    snapshot_interval_ms: 100
+    precision_ms: 1
+  
+  # Dynamic spread model
+  spread:
+    model_type: "dynamic"
+    update_frequency_ms: 50
+    lookback_window: 1000  # ticks
+    percentile_range: [5, 95]
+
+# ============================================================================
+# FEATURE ENGINEERING
+# ============================================================================
+features:
+  # Feature set selection
+  use_minimal_features: false  # Set to true for minimal subset only
+  use_extended_features: true  # Full catalogue (>200 features)
+  
+  # Minimal feature subset
+  minimal:
+    - "hma_5"          # Hull Moving Average (5 periods)
+    - "gkyz"           # Garman-Klass-Yang-Zhang volatility
+    - "obi_5_level"    # 5-level Order Book Imbalance
+    - "vpvr_breakout"  # Volume Profile Value Range breakout
+    - "liquidity_sweep" # Liquidity sweep detection
+    - "atr_14"         # Average True Range (14 periods)
+  
+  # Technical indicators
+  technical:
+    moving_averages:
+      periods: [5, 10, 20, 50, 100, 200]
+      types: ["sma", "ema", "hma", "wma"]
+    
+    momentum:
+      rsi_periods: [9, 14, 21]
+      macd_params: [[12, 26, 9], [5, 35, 5]]
+      stoch_params: [14, 3, 3]
+    
+    volatility:
+      atr_periods: [7, 14, 21]
+      bollinger_periods: [20]
+      bollinger_std: [2.0, 2.5]
+      
+    volume:
+      vwap_periods: [20, 50]
+      volume_sma_periods: [10, 20]
+  
+  # Market microstructure
+  microstructure:
+    order_flow:
+      imbalance_levels: [3, 5, 10]
+      flow_windows: [50, 100, 200]  # ticks
+    
+    liquidity:
+      bid_ask_spread: true
+      depth_imbalance: true
+      liquidity_ratio: true
+    
+    price_action:
+      tick_direction: true
+      price_acceleration: true
+      support_resistance: true
+  
+  # Time-based features
+  temporal:
+    time_of_day: true
+    day_of_week: true
+    session_markers: true  # London, NY, Asia sessions
+    market_hours: true
+  
+  # Lag features
+  lags:
+    price_lags: [1, 2, 3, 5, 10, 20]
+    volume_lags: [1, 2, 3, 5, 10]
+    volatility_lags: [1, 2, 3, 5]
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+models:
+  # Primary model
+  primary:
+    type: "lightgbm"
+    objective: "binary"
+    metric: "binary_logloss"
+    boosting_type: "gbdt"
+    num_leaves: 255
+    learning_rate: 0.05
+    feature_fraction: 0.8
+    bagging_fraction: 0.8
+    bagging_freq: 5
+    min_child_samples: 20
+    reg_alpha: 0.1
+    reg_lambda: 0.1
+    early_stopping_rounds: 100
+    num_boost_round: 1000
+    
+  # Secondary models for ensemble
+  secondary:
+    xgboost:
+      objective: "binary:logistic"
+      eval_metric: "logloss"
+      max_depth: 6
+      learning_rate: 0.05
+      n_estimators: 1000
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      early_stopping_rounds: 100
+    
+    lstm:
+      sequence_length: 100
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.2
+      learning_rate: 0.001
+      batch_size: 256
+      epochs: 50
+      early_stopping_patience: 10
+  
+  # Ensemble configuration
+  ensemble:
+    method: "stacking"
+    meta_model: "logistic_regression"
+    cv_folds: 5
+    
+  # Model retraining
+  retraining:
+    frequency: "monthly"
+    walk_forward: true
+    min_train_samples: 100000
+    validation_split: 0.2
+    
+  # Hyperparameter optimization
+  optimization:
+    method: "optuna"
+    study_name: "xauusd_scalper_optimization"
+    n_trials: 100
+    timeout_hours: 24
+    sampler: "TPE"  # Tree-structured Parzen Estimator
+
+# ============================================================================
+# BACKTESTING CONFIGURATION
+# ============================================================================
+backtesting:
+  # Engine settings
+  engine:
+    type: "tick_replay"
+    start_date: "2023-01-01"
+    end_date: "2023-12-31"
+    initial_balance: 100000.0
+    currency: "USD"
+    
+  # Order execution
+  execution:
+    queue_type: "FIFO"
+    latency_range_ms: [5, 50]  # Latency-aware fills
+    fill_probability: 0.98
+    partial_fills: true
+    
+  # Cost model
+  costs:
+    commission_per_lot: 7.0  # $7 per lot
+    spread_model: "dynamic"  # Uses dynamic spread from data config
+    slippage:
+      distribution: "historical"  # Drawn from historical distribution
+      percentile_range: [10, 90]
+      max_slippage_pips: 2.0
+    
+  # Position tracking
+  position:
+    max_position_size: 10.0  # lots
+    position_sizing: "kelly_fraction"
+    leverage: 1.0  # No leverage for safety
+    
+  # Performance metrics
+  metrics:
+    sharpe_ratio: true
+    sortino_ratio: true
+    calmar_ratio: true
+    max_drawdown: true
+    var_95: true
+    profit_factor: true
+    win_rate: true
+    avg_trade_duration: true
+
+# ============================================================================
+# LIVE TRADING CONFIGURATION
+# ============================================================================
+live:
+  # Performance targets
+  latency:
+    feed_to_feature_ms: 10
+    feature_to_prediction_ms: 20
+    prediction_to_order_ms: 20
+    total_target_ms: 50
+    
+  # Data feed
+  feed:
+    type: "websocket"
+    reconnect_attempts: 5
+    heartbeat_interval: 30
+    buffer_size: 10000
+    
+  # Order routing
+  order_router:
+    primary_broker: "broker_a"
+    backup_broker: "broker_b"
+    smart_routing: true
+    order_types: ["market", "limit", "stop"]
+    
+  # Real-time processing
+  processing:
+    async_workers: 4
+    queue_size: 1000
+    batch_processing: false
+
+# ============================================================================
+# RISK MANAGEMENT
+# ============================================================================
+risk:
+  # Position sizing
+  position_sizing:
+    method: "kelly_fraction"
+    kelly_multiplier: 0.25  # Conservative Kelly fraction
+    max_risk_per_trade: 0.02  # 2% of account per trade
+    
+  # Stop loss
+  stop_loss:
+    method: "atr_multiple"
+    atr_multiple: 2.0
+    atr_period: 14
+    max_stop_pips: 50
+    
+  # Daily limits
+  daily_limits:
+    max_loss_usd: 2000.0  # Hard daily loss stop
+    max_trades: 100
+    max_exposure_lots: 20.0
+    
+  # Session filters
+  session_filter:
+    enabled: true
+    allowed_sessions: ["london", "ny_open", "ny_close"]
+    blackout_sessions: ["asia_thin", "weekend"]
+    
+  # News blackout
+  news_blackout:
+    enabled: true
+    before_minutes: 5
+    after_minutes: 5
+    high_impact_only: true
+    
+  # Risk monitoring
+  monitoring:
+    real_time_var: true
+    correlation_limits: 0.8
+    sector_exposure_limits: true
+
+# ============================================================================
+# LOGGING & MONITORING
+# ============================================================================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "structured"  # structured, json, text
+  handlers:
+    console: true
+    file: true
+    rotation: "daily"
+    retention_days: 30
+    
+  # Performance logging
+  performance:
+    trade_log: true
+    latency_log: true
+    feature_importance_log: true
+    model_metrics_log: true
+
+# ============================================================================
+# EXPLAINABILITY
+# ============================================================================
+explainability:
+  shap:
+    enabled: true
+    auto_generate: true  # After each retrain
+    sample_size: 1000
+    plot_types: ["summary", "waterfall", "force"]
+    save_plots: true
+    
+  feature_importance:
+    method: "gain"  # gain, split, permutation
+    top_n_features: 50
+    
+# ============================================================================
+# OUTPUT & REPORTING
+# ============================================================================
+output:
+  # Directories
+  directories:
+    models: "models/"
+    results: "results/"
+    plots: "plots/"
+    logs: "logs/"
+    reports: "reports/"
+    
+  # Report generation
+  reports:
+    auto_generate: true
+    frequency: "daily"
+    formats: ["html", "pdf"]
+    include_plots: true
+    
+  # Artifacts
+  artifacts:
+    whitepaper: "docs/whitepaper.md"
+    presentation: "docs/presentation.md"
+    max_pages_whitepaper: 40
+    slides_presentation: 10
+
+# ============================================================================
+# TESTING
+# ============================================================================
+testing:
+  unit_tests:
+    coverage_threshold: 90
+    deterministic_seeds: true
+    parallel_execution: true
+    
+  integration_tests:
+    end_to_end: true
+    performance_benchmarks: true
+    
+# ============================================================================
+# CI/CD
+# ============================================================================
+ci_cd:
+  github_actions: true
+  automated_testing: true
+  performance_regression_tests: true
+  deployment_automation: true

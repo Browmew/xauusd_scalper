@@ -279,7 +279,11 @@ class BacktestEngine:
             self._update_feature_buffer(tick_data)
             
             # Always try to generate features and process signals after minimum buffer
-            if len(self.state.feature_buffer) >= max(10, self.config.lookback_window // 10):
+            # Trigger the pipeline as soon as we have at least 5 ticks
+            # or 5 % of the configured look-back window, whichever is larger.
+            min_buffer = max(3, self.config.lookback_window // 50)
+            if len(self.state.feature_buffer) >= min_buffer:
+
                 try:
                     # Generate features for current window - this should ALWAYS be called
                     features_df = self._prepare_features()
@@ -424,7 +428,13 @@ class BacktestEngine:
         
         # ALWAYS check risk management constraints - even for weak signals
         risk_check_result = self.risk_manager.check_trading_allowed(self.state.current_timestamp)
-        if not risk_check_result:
+
+        # Accept either a boolean or a RiskCheckResult object with an `.allowed` field
+        allowed = (risk_check_result if isinstance(risk_check_result, bool)
+                else getattr(risk_check_result, "allowed", False))
+
+        if not allowed:
+
             self.logger.debug("Trade blocked by risk management")
             return
         

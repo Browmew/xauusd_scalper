@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from datetime import datetime
 import websockets
 try:
-    import uvloop
+    import uvloop # type: ignore
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     logging.info("Using uvloop for asyncio event loop.")
 except ImportError:
     logging.info("uvloop not available (Windows), using default asyncio event loop.")
 
 try:
-    import uvloop
+    import uvloop # type: ignore
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 except ImportError:
     logging.warning("uvloop not available, falling back to default event loop")

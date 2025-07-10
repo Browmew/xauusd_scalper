@@ -332,69 +332,6 @@ class RiskManager:
         if self.current_balance > self.peak_balance:
             self.peak_balance = self.current_balance
     
-    def calculate_position_size(
-        self,
-        symbol: str,
-        signal_strength: float,
-        win_probability: float,
-        avg_win: float,
-        avg_loss: float,
-        current_atr: float,
-        current_price: float
-    ) -> PositionSizeResult:
-        """
-        Calculate optimal position size using Kelly criterion with ATR-based stops.
-        
-        Args:
-            symbol: Trading symbol
-            signal_strength: Model confidence (0-1)
-            win_probability: Expected win rate (0-1)
-            avg_win: Average winning trade amount
-            avg_loss: Average losing trade amount (positive value)
-            current_atr: Current ATR value for stop distance
-            current_price: Current market price
-            
-        Returns:
-            PositionSizeResult with calculated size and reasoning
-        """
-        # Calculate Kelly fraction
-        if avg_loss <= 0 or win_probability <= 0:
-            return PositionSizeResult(0.0, "Invalid win/loss parameters", 0.0, 0.0, 0.0)
-        
-        win_loss_ratio = avg_win / avg_loss
-        kelly_fraction = (win_probability * win_loss_ratio - (1 - win_probability)) / win_loss_ratio
-        
-        # Apply Kelly multiplier and signal strength
-        adjusted_kelly = kelly_fraction * self.kelly_multiplier * signal_strength
-        
-        # Calculate ATR-based stop distance
-        atr_stop_distance = current_atr * self.atr_stop_multiplier
-        stop_loss_pct = atr_stop_distance / current_price
-        
-        # Calculate position size based on risk per trade
-        risk_amount = self.current_balance * abs(adjusted_kelly) * stop_loss_pct
-        position_value = min(risk_amount / stop_loss_pct, self.max_position_size)
-        position_value = max(position_value, self.min_position_size)
-        
-        # Apply maximum position limit
-        max_allowed = min(self.max_position_size, self.current_balance * 0.1)  # Max 10% of balance
-        final_size = min(position_value, max_allowed)
-        
-        reason = "Kelly-based sizing with ATR stops"
-        if final_size == max_allowed:
-            reason = "Limited by maximum position size"
-        elif adjusted_kelly <= 0:
-            final_size = 0.0
-            reason = "Negative Kelly fraction - no position"
-        
-        return PositionSizeResult(
-            size=final_size,
-            reason=reason,
-            max_allowed=max_allowed,
-            kelly_fraction=adjusted_kelly,
-            atr_stop_distance=atr_stop_distance
-        )
-    
     def check_trading_allowed(self, timestamp: datetime = None, daily_pnl: float = None, 
                             current_drawdown: float = None, upcoming_news: List = None) -> bool:
         """Check if trading is allowed at given timestamp."""

@@ -10,78 +10,49 @@ import logging
 from numba import jit
 
 from .minimal_features import (
+    hma_5,
+    gkyz_volatility,
+    order_book_imbalance_5l,
+    vpvr_breakout,
+    liquidity_sweep_detection,
+    atr_14,
     calculate_price_features,
     calculate_spread_features, 
     calculate_volume_features,
     calculate_momentum_features
 )
 
-# Import all extended features
+# Import only the functions that actually exist in extended_features.py
 from .extended_features import (
     simple_moving_average,
     exponential_moving_average,
+    weighted_moving_average,
     relative_strength_index,
-    bollinger_bands,
     macd,
     stochastic_oscillator,
-    williams_r,
-    commodity_channel_index,
+    bollinger_bands,
     average_true_range,
-    parabolic_sar,
-    ichimoku_cloud,
-    fibonacci_retracements,
-    pivot_points,
-    support_resistance_levels,
-    volume_weighted_average_price,
-    money_flow_index,
-    accumulation_distribution_line,
+    williams_percent_r,
+    commodity_channel_index,
+    rate_of_change,
+    momentum,
     on_balance_volume,
-    chaikin_oscillator,
-    volume_rate_of_change,
+    volume_weighted_average_price,
     price_volume_trend,
-    ease_of_movement,
-    negative_volume_index,
-    positive_volume_index,
-    volume_zone_oscillator,
-    klinger_oscillator,
-    twiggs_money_flow,
-    elder_ray_index,
-    chande_momentum_oscillator,
-    detrended_price_oscillator,
-    ultimate_oscillator,
-    mass_index,
-    choppiness_index,
-    aroon_oscillator,
-    balance_of_power,
-    typical_price,
-    weighted_close,
-    median_price,
-    true_range,
-    directional_movement_index,
-    trix,
-    vortex_indicator,
-    know_sure_thing,
-    schaff_trend_cycle,
-    elder_force_index,
-    emv_oscillator,
-    money_flow_oscillator,
-    price_oscillator,
-    absolute_price_oscillator,
-    percentage_price_oscillator,
-    linear_regression_slope,
-    linear_regression_intercept,
-    standard_error,
-    r_squared,
-    time_series_forecast,
-    correlation_coefficient,
-    beta_coefficient,
-    historical_volatility,
-    chaikin_volatility,
-    standard_deviation,
-    variance,
-    covariance,
-    mean_deviation,
-    median_absolute_deviation
+    donchian_channel,
+    keltner_channel,
+    aroon,
+    day_of_week,
+    hour_of_day,
+    is_london_session,
+    is_new_york_session,
+    is_overlap_session,
+    volatility_ratio,
+    price_distance_from_sma,
+    bollinger_bandwidth,
+    bollinger_percent_b,
+    money_flow_index,
+    chaikin_oscillator
 )
 
 
@@ -136,31 +107,54 @@ class FeaturePipeline:
         self.logger.debug(f"Generated {features_df.shape[1]} features")
         return features_df
     
-    # This corrected version directly calls the functions that DO exist
-    # in minimal_features.py, achieving the same goal as your original code.
-
-    def _calculate_minimal_features(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_minimal_features(self, data: pd.DataFrame, l2_data: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """Calculate the core minimal feature set."""
         self.logger.debug("Calculating minimal features")
 
-        # This corrected version directly calls the functions that DO exist
-        # in the minimal_features.py file.
+        # Use the functions that DO exist in minimal_features.py
+        features = {}
+        
+        # Price features
+        if 'close' in data.columns:
+            features['hma_5'] = hma_5(data['close'])
+            
+        # OHLC volatility
+        if all(col in data.columns for col in ['open', 'high', 'low', 'close']):
+            features['gkyz_volatility'] = gkyz_volatility(data, window=14)
+            features['atr_14'] = atr_14(data)
 
-        features = {
-            'hma_5': hma_5(data['close']),
-            'gkyz_volatility': gkyz_volatility(data, window=14),
-            'obi_5l': order_book_imbalance_5l(data),
-            'vpvr_breakout': vpvr_breakout(data),
-            'liquidity_sweep': liquidity_sweep_detection(data),
-            'atr_14': atr_14(data)
-        }
+        # Order book features (if L2 data available)
+        if l2_data is not None or all(f'bid_volume_{i}' in data.columns for i in range(1, 6)):
+            features['obi_5l'] = order_book_imbalance_5l(data if l2_data is None else l2_data)
+
+        # Volume profile features
+        if 'volume' in data.columns and 'close' in data.columns:
+            features['vpvr_breakout'] = vpvr_breakout(data)
+
+        # Liquidity sweep detection
+        if all(col in data.columns for col in ['high', 'low', 'close']):
+            features['liquidity_sweep'] = liquidity_sweep_detection(data)
+
+        # Use the basic feature calculation functions
+        price_features = calculate_price_features(data)
+        spread_features = calculate_spread_features(data)
+        volume_features = calculate_volume_features(data)
+        momentum_features = calculate_momentum_features(data)
+        
+        # Combine all features
+        all_features = {**features}
+        
+        # Add the basic features
+        for df in [price_features, spread_features, volume_features, momentum_features]:
+            for col in df.columns:
+                all_features[col] = df[col]
 
         # Combine all individual feature Series into a single DataFrame
-        return pd.DataFrame(features)
+        return pd.DataFrame(all_features, index=data.index)
     
     def _calculate_extended_features(self, tick_data: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate the extended feature set using all available indicators.
+        Calculate the extended feature set using available indicators.
         
         Args:
             tick_data: Input tick data
@@ -169,12 +163,6 @@ class FeaturePipeline:
             DataFrame with extended features
         """
         self.logger.debug("Calculating extended features")
-        
-        prices = tick_data['price'].values
-        volumes = tick_data['volume'].values
-        high_prices = tick_data.get('high', prices).values
-        low_prices = tick_data.get('low', prices).values
-        close_prices = prices
         
         # Get feature parameters from config
         sma_periods = self.feature_params.get('sma_periods', [5, 10, 20, 50])
@@ -195,128 +183,126 @@ class FeaturePipeline:
         
         # Moving Averages
         for period in sma_periods:
-            sma_values = simple_moving_average(close_prices, period)
+            sma_values = simple_moving_average(tick_data, period)
             extended_features[f'sma_{period}'] = sma_values
-            extended_features[f'price_sma_{period}_ratio'] = close_prices / np.where(sma_values != 0, sma_values, 1)
+            extended_features[f'price_sma_{period}_ratio'] = tick_data['close'] / sma_values.replace(0, np.nan)
             
         for period in ema_periods:
-            ema_values = exponential_moving_average(close_prices, period)
+            ema_values = exponential_moving_average(tick_data, period)
             extended_features[f'ema_{period}'] = ema_values
-            extended_features[f'price_ema_{period}_ratio'] = close_prices / np.where(ema_values != 0, ema_values, 1)
+            extended_features[f'price_ema_{period}_ratio'] = tick_data['close'] / ema_values.replace(0, np.nan)
         
         # Momentum Indicators
-        rsi_values = relative_strength_index(close_prices, rsi_period)
+        rsi_values = relative_strength_index(tick_data, rsi_period)
         extended_features['rsi'] = rsi_values
         extended_features['rsi_oversold'] = (rsi_values < 30).astype(float)
         extended_features['rsi_overbought'] = (rsi_values > 70).astype(float)
         
         # Bollinger Bands
-        bb_upper, bb_middle, bb_lower = bollinger_bands(close_prices, bb_period, bb_std)
+        bb_upper, bb_middle, bb_lower = bollinger_bands(tick_data, bb_period, bb_std)
         extended_features['bb_upper'] = bb_upper
         extended_features['bb_middle'] = bb_middle
         extended_features['bb_lower'] = bb_lower
-        extended_features['bb_position'] = (close_prices - bb_lower) / np.where((bb_upper - bb_lower) != 0, (bb_upper - bb_lower), 1)
+        extended_features['bb_position'] = (tick_data['close'] - bb_lower) / (bb_upper - bb_lower).replace(0, np.nan)
         extended_features['bb_squeeze'] = ((bb_upper - bb_lower) / bb_middle).fillna(0)
         
         # MACD
-        macd_line, macd_signal_line, macd_histogram = macd(close_prices, macd_fast, macd_slow, macd_signal)
+        macd_line, macd_signal_line, macd_histogram = macd(tick_data, macd_fast, macd_slow, macd_signal)
         extended_features['macd'] = macd_line
         extended_features['macd_signal'] = macd_signal_line
         extended_features['macd_histogram'] = macd_histogram
         extended_features['macd_bullish'] = (macd_line > macd_signal_line).astype(float)
         
         # Stochastic Oscillator
-        stoch_k_values, stoch_d_values = stochastic_oscillator(high_prices, low_prices, close_prices, stoch_k, stoch_d)
+        stoch_k_values, stoch_d_values = stochastic_oscillator(tick_data, stoch_k, stoch_d)
         extended_features['stoch_k'] = stoch_k_values
         extended_features['stoch_d'] = stoch_d_values
         extended_features['stoch_oversold'] = (stoch_d_values < 20).astype(float)
         extended_features['stoch_overbought'] = (stoch_d_values > 80).astype(float)
         
         # Williams %R
-        williams_values = williams_r(high_prices, low_prices, close_prices, williams_period)
+        williams_values = williams_percent_r(tick_data, williams_period)
         extended_features['williams_r'] = williams_values
         
         # Commodity Channel Index
-        cci_values = commodity_channel_index(high_prices, low_prices, close_prices, cci_period)
+        cci_values = commodity_channel_index(tick_data, cci_period)
         extended_features['cci'] = cci_values
         extended_features['cci_extreme'] = (np.abs(cci_values) > 100).astype(float)
         
         # Average True Range
-        atr_values = average_true_range(high_prices, low_prices, close_prices, atr_period)
+        atr_values = average_true_range(tick_data, atr_period)
         extended_features['atr'] = atr_values
-        extended_features['atr_normalized'] = atr_values / close_prices
+        extended_features['atr_normalized'] = atr_values / tick_data['close']
         
-        # Volume Indicators
-        if len(volumes) > 0:
-            vwap_values = volume_weighted_average_price(close_prices, volumes)
+        # Volume Indicators (if volume data available)
+        if 'volume' in tick_data.columns:
+            vwap_values = volume_weighted_average_price(tick_data)
             extended_features['vwap'] = vwap_values
-            extended_features['price_vwap_ratio'] = close_prices / np.where(vwap_values != 0, vwap_values, 1)
+            extended_features['price_vwap_ratio'] = tick_data['close'] / vwap_values.replace(0, np.nan)
             
-            mfi_values = money_flow_index(high_prices, low_prices, close_prices, volumes, 14)
+            mfi_values = money_flow_index(tick_data, 14)
             extended_features['mfi'] = mfi_values
             
-            ad_line = accumulation_distribution_line(high_prices, low_prices, close_prices, volumes)
-            extended_features['ad_line'] = ad_line
-            
-            obv_values = on_balance_volume(close_prices, volumes)
+            obv_values = on_balance_volume(tick_data)
             extended_features['obv'] = obv_values
             
-            # Volume rate of change
-            vol_roc = volume_rate_of_change(volumes, 10)
-            extended_features['volume_roc'] = vol_roc
+            # Price Volume Trend
+            pvt_values = price_volume_trend(tick_data)
+            extended_features['pvt'] = pvt_values
         
-        # Price-based indicators
-        typical_price_values = typical_price(high_prices, low_prices, close_prices)
-        extended_features['typical_price'] = typical_price_values
+        # Additional technical indicators
+        roc_values = rate_of_change(tick_data, 12)
+        extended_features['roc'] = roc_values
         
-        weighted_close_values = weighted_close(high_prices, low_prices, close_prices)
-        extended_features['weighted_close'] = weighted_close_values
+        momentum_values = momentum(tick_data, 10)
+        extended_features['momentum'] = momentum_values
         
-        median_price_values = median_price(high_prices, low_prices)
-        extended_features['median_price'] = median_price_values
+        # Donchian Channel
+        dc_upper, dc_middle, dc_lower = donchian_channel(tick_data, 20)
+        extended_features['donchian_upper'] = dc_upper
+        extended_features['donchian_middle'] = dc_middle
+        extended_features['donchian_lower'] = dc_lower
         
-        # Volatility indicators
-        historical_vol = historical_volatility(close_prices, 20)
-        extended_features['historical_volatility'] = historical_vol
+        # Keltner Channel
+        kc_upper, kc_middle, kc_lower = keltner_channel(tick_data, 20)
+        extended_features['keltner_upper'] = kc_upper
+        extended_features['keltner_middle'] = kc_middle
+        extended_features['keltner_lower'] = kc_lower
         
-        # Advanced momentum indicators
-        cmo_values = chande_momentum_oscillator(close_prices, 14)
-        extended_features['cmo'] = cmo_values
+        # Aroon indicators
+        aroon_up, aroon_down = aroon(tick_data, 25)
+        extended_features['aroon_up'] = aroon_up
+        extended_features['aroon_down'] = aroon_down
         
-        dpo_values = detrended_price_oscillator(close_prices, 20)
-        extended_features['dpo'] = dpo_values
-        
-        ultimate_osc = ultimate_oscillator(high_prices, low_prices, close_prices, 7, 14, 28)
-        extended_features['ultimate_oscillator'] = ultimate_osc
-        
-        # Trend indicators
-        dmi_plus, dmi_minus, adx = directional_movement_index(high_prices, low_prices, close_prices, 14)
-        extended_features['dmi_plus'] = dmi_plus
-        extended_features['dmi_minus'] = dmi_minus
-        extended_features['adx'] = adx
-        extended_features['trend_strength'] = (adx > 25).astype(float)
-        
-        trix_values = trix(close_prices, 14)
-        extended_features['trix'] = trix_values
-        
-        # Support/Resistance levels
-        support_levels, resistance_levels = support_resistance_levels(high_prices, low_prices, close_prices, 20)
-        extended_features['nearest_support'] = support_levels
-        extended_features['nearest_resistance'] = resistance_levels
-        extended_features['support_distance'] = (close_prices - support_levels) / close_prices
-        extended_features['resistance_distance'] = (resistance_levels - close_prices) / close_prices
+        # Time-based features
+        extended_features['day_of_week'] = day_of_week(tick_data)
+        extended_features['hour_of_day'] = hour_of_day(tick_data)
+        extended_features['is_london_session'] = is_london_session(tick_data)
+        extended_features['is_ny_session'] = is_new_york_session(tick_data)
+        extended_features['is_overlap_session'] = is_overlap_session(tick_data)
         
         # Statistical features
-        linear_slope = linear_regression_slope(close_prices, 20)
-        extended_features['linear_slope'] = linear_slope
-        extended_features['trend_direction'] = np.sign(linear_slope)
+        volatility_ratio_values = volatility_ratio(tick_data, 10, 30)
+        extended_features['volatility_ratio'] = volatility_ratio_values
         
-        r_squared_values = r_squared(close_prices, 20)
-        extended_features['r_squared'] = r_squared_values
-        extended_features['trend_reliability'] = (r_squared_values > 0.7).astype(float)
+        price_dist_sma = price_distance_from_sma(tick_data, 20)
+        extended_features['price_distance_sma_20'] = price_dist_sma
+        
+        bb_bandwidth = bollinger_bandwidth(tick_data, 20, 2.0)
+        extended_features['bb_bandwidth'] = bb_bandwidth
+        
+        bb_percent_b = bollinger_percent_b(tick_data, 20, 2.0)
+        extended_features['bb_percent_b'] = bb_percent_b
+        
+        # Chaikin Oscillator
+        chaikin_osc = chaikin_oscillator(tick_data, 3, 10)
+        extended_features['chaikin_oscillator'] = chaikin_osc
         
         # Create DataFrame from extended features
         result_df = pd.DataFrame(extended_features, index=tick_data.index)
+        
+        # Fill any NaN values
+        result_df = result_df.fillna(method='ffill').fillna(0)
         
         self.logger.debug(f"Generated {len(extended_features)} extended features")
         return result_df
@@ -329,8 +315,11 @@ class FeaturePipeline:
             List of feature names
         """
         minimal_features = [
+            'hma_5', 'gkyz_volatility', 'atr_14', 'obi_5l', 
+            'vpvr_breakout', 'liquidity_sweep',
             'price_return_1', 'price_return_5', 'price_return_10',
             'price_volatility_10', 'price_volatility_30',
+            'spread_abs', 'spread_rel',
             'volume_mean_10', 'volume_std_10', 'volume_ratio_5',
             'momentum_1', 'momentum_5', 'momentum_10'
         ]
@@ -358,12 +347,14 @@ class FeaturePipeline:
             'macd', 'macd_signal', 'macd_histogram', 'macd_bullish',
             'stoch_k', 'stoch_d', 'stoch_oversold', 'stoch_overbought',
             'williams_r', 'cci', 'cci_extreme', 'atr', 'atr_normalized',
-            'vwap', 'price_vwap_ratio', 'mfi', 'ad_line', 'obv', 'volume_roc',
-            'typical_price', 'weighted_close', 'median_price',
-            'historical_volatility', 'cmo', 'dpo', 'ultimate_oscillator',
-            'dmi_plus', 'dmi_minus', 'adx', 'trend_strength', 'trix',
-            'nearest_support', 'nearest_resistance', 'support_distance', 'resistance_distance',
-            'linear_slope', 'trend_direction', 'r_squared', 'trend_reliability'
+            'vwap', 'price_vwap_ratio', 'mfi', 'obv', 'pvt',
+            'roc', 'momentum', 
+            'donchian_upper', 'donchian_middle', 'donchian_lower',
+            'keltner_upper', 'keltner_middle', 'keltner_lower',
+            'aroon_up', 'aroon_down',
+            'day_of_week', 'hour_of_day', 'is_london_session', 'is_ny_session', 'is_overlap_session',
+            'volatility_ratio', 'price_distance_sma_20', 'bb_bandwidth', 'bb_percent_b',
+            'chaikin_oscillator'
         ])
         
         return minimal_features + extended_features

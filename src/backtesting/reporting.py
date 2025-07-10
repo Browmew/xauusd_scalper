@@ -15,6 +15,7 @@ import seaborn as sns
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+from dataclasses import dataclass, field
 import warnings
 
 # Suppress matplotlib warnings
@@ -23,6 +24,20 @@ warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
 # Set plotting style
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
+
+
+@dataclass
+class BacktestReport:
+    """Results from a backtest execution."""
+    total_return: float
+    sharpe_ratio: float
+    max_drawdown: float
+    total_trades: int
+    win_rate: float
+    final_balance: float
+    total_pnl: float
+    performance_metrics: Dict[str, Any] = field(default_factory=dict)
+    trade_history: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def generate_report(
@@ -52,7 +67,7 @@ def generate_report(
     print(f"{'='*60}")
     
     # Print performance summary
-    _print_performance_summary(results['performance_summary'])
+    _print_performance_summary(results.get('performance_summary', {}))
     
     # Print exchange statistics
     if 'exchange_statistics' in results:
@@ -99,6 +114,21 @@ def generate_report(
     print(f"\nReport generated successfully!")
     if save_plots:
         print(f"Files saved to: {output_path.absolute()}")
+
+
+def generate_backtest_report(results: Dict[str, Any], output_dir: str = "reports") -> Path:
+    """
+    Alias for generate_report for backward compatibility.
+    
+    Args:
+        results: Dictionary containing backtest results
+        output_dir: Directory to save report files
+        
+    Returns:
+        Path to the generated report directory
+    """
+    generate_report(results, output_dir, save_plots=True, show_plots=False)
+    return Path(output_dir)
 
 
 def _print_performance_summary(performance_summary: Dict[str, float]) -> None:
@@ -184,6 +214,11 @@ def _plot_drawdown(
 ) -> None:
     """Generate drawdown plot."""
     df = pd.DataFrame(performance_history)
+    
+    # Calculate drawdown if not present
+    if 'drawdown' not in df.columns:
+        peak = df['balance'].expanding().max()
+        df['drawdown'] = (df['balance'] - peak) / peak * 100
     
     fig, ax = plt.subplots(figsize=(12, 6))
     

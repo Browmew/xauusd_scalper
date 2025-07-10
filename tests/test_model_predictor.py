@@ -61,8 +61,18 @@ class TestModelPredictor:
         model_path = tmp_path / "test_model.pkl"
         metadata_path = tmp_path / "test_model_metadata.json"
         
-        # Save mock model
-        joblib.dump(model, model_path)
+        # Create a simple sklearn-like model class instead of Mock
+        class SimpleTestModel:
+            def predict(self, X):
+                return np.array([0.1, 0.2, 0.3][:len(X)])
+            
+            def predict_proba(self, X):
+                return np.array([[0.4, 0.6], [0.3, 0.7], [0.5, 0.5]][:len(X)])
+        
+        test_model = SimpleTestModel()
+        
+        # Save the simple model
+        joblib.dump(test_model, model_path)
         
         # Save metadata
         with open(metadata_path, 'w') as f:

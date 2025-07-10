@@ -21,21 +21,31 @@ from ..models.predict import ModelPredictor
 from ..risk.manager import RiskManager
 from .exchange_simulator import ExchangeSimulator, Order
 from .reporting import generate_report, BacktestReport
+from ..utils.logging import get_logger
+logger = get_logger(__name__)
 
 
 @dataclass
 class BacktestConfig:
     """Configuration for backtest execution."""
-    start_date: str
-    end_date: str
-    initial_balance: float
-    tick_file: str
-    l2_file: str
-    model_path: str
-    commission_rate: float
-    min_prediction_threshold: float
-    lookback_window: int
-    symbol: str = "XAUUSD"
+    data: Dict[str, Any]
+    features: Dict[str, Any] = field(default_factory=dict)
+    model: Dict[str, Any] = field(default_factory=dict)
+    risk: Dict[str, Any] = field(default_factory=dict)
+    backtesting: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        # Extract values from nested config structure
+        self.start_date = self.data.get('start_date', '2023-01-01')
+        self.end_date = self.data.get('end_date', '2023-12-31')
+        self.initial_balance = self.backtesting.get('initial_balance', 100000.0)
+        self.tick_file = self.data.get('tick_file', 'data/historical/ticks/XAUUSD_2023_ticks.csv.gz')
+        self.l2_file = self.data.get('l2_file', 'data/historical/l2_orderbook/XAUUSD_2023_l2.csv.gz')
+        self.model_path = self.model.get('model_path', 'models/xauusd_model.pkl')
+        self.commission_rate = self.backtesting.get('commission_per_lot', 7.0)
+        self.min_prediction_threshold = self.model.get('min_prediction_confidence', 0.55)
+        self.lookback_window = self.features.get('lookback_window', 100)
+        self.symbol = self.data.get('symbol', 'XAUUSD')
 
 
 @dataclass
@@ -62,17 +72,17 @@ class BacktestEngine:
     trade execution with realistic market conditions.
     """
     
-    def __init__(self, config_overrides: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Dict[str, Any]):
         """
         Initialize the backtesting engine with all required components.
         
         Args:
-            config_overrides: Optional dictionary to override default config values
+            config: Configuration dictionary containing all settings
         """
         self.logger = get_logger(__name__)
         
         # Load configuration
-        self._load_config(config_overrides)
+        self._load_config(config)
         
         # Initialize all subsystems
         self._initialize_components()
@@ -98,28 +108,10 @@ class BacktestEngine:
                         initial_balance=self.config.initial_balance,
                         model_path=self.config.model_path)
     
-    def _load_config(self, overrides: Optional[Dict[str, Any]] = None) -> None:
-        """Load backtesting configuration from config file with optional overrides."""
-        # Get config values with proper defaults
-        config_dict = {
-            'start_date': get_config_value('backtesting.engine.start_date', '2023-01-01'),
-            'end_date': get_config_value('backtesting.engine.end_date', '2023-12-31'),
-            'initial_balance': get_config_value('backtesting.engine.initial_balance', 100000.0),
-            'tick_file': get_config_value('data.sources.tick_data', 'data/historical/ticks/XAUUSD_2023_ticks.csv.gz'),
-            'l2_file': get_config_value('data.sources.l2_orderbook', 'data/historical/l2_orderbook/XAUUSD_2023_l2.csv.gz'),
-            'model_path': get_config_value('models.trained_model_path', 'models/xauusd_model.pkl'),
-            'commission_rate': get_config_value('backtesting.costs.commission_per_lot', 7.0),
-            'min_prediction_threshold': get_config_value('models.min_prediction_confidence', 0.55),
-            'lookback_window': get_config_value('features.lookback_window', 100),
-            'symbol': get_config_value('data.symbol', 'XAUUSD')
-        }
-        
-        # Apply overrides if provided
-        if overrides:
-            config_dict.update(overrides)
-        
-        self.config = BacktestConfig(**config_dict)
-        self.logger.debug("Backtest configuration loaded", config=config_dict)
+    def _load_config(self, config: Dict[str, Any]) -> None:
+        """Load backtesting configuration."""
+        self.config = BacktestConfig(**config)
+        self.logger.debug("Backtest configuration loaded", config=config)
     
     def _initialize_components(self) -> None:
         """Initialize all required subsystem components."""
@@ -127,16 +119,8 @@ class BacktestEngine:
             # Data loading
             self.data_loader = DataLoader()
             
-            # Feature engineering - get config from global config
-            features_config = {
-                'use_extended_features': get_config_value('features.use_extended_features', True),
-                'use_minimal_features': get_config_value('features.use_minimal_features', False),
-                'technical': get_config_value('features.technical', {}),
-                'microstructure': get_config_value('features.microstructure', {}),
-                'temporal': get_config_value('features.temporal', {}),
-                'lags': get_config_value('features.lags', {})
-            }
-            self.feature_pipeline = FeaturePipeline(features_config)
+            # Feature engineering
+            self.feature_pipeline = FeaturePipeline(self.config.features)
             
             # Model prediction
             self.model_predictor = ModelPredictor()
@@ -147,7 +131,7 @@ class BacktestEngine:
                 self.logger.warning(f"Model file not found: {self.config.model_path}")
             
             # Risk management
-            self.risk_manager = RiskManager()
+            self.risk_manager = RiskManager(self.config.risk)
             
             # Exchange simulation
             self.exchange_simulator = ExchangeSimulator()

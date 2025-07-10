@@ -195,7 +195,9 @@ def setup_logging() -> None:
         file_handler.setLevel(getattr(logging, log_level))
         
         # Always use JSON format for file logs
-        file_formatter = logging.Formatter('%(message)s')
+        file_formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)s | %(name)s | %(message)s | %(pathname)s:%(lineno)d'
+    )
         file_handler.setFormatter(file_formatter)
         file_handler.addFilter(PerformanceFilter())
         

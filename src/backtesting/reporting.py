@@ -11,7 +11,11 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
+try:
+    import seaborn as sns
+    sns.set_palette("husl")
+except ImportError:
+    sns = None
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional

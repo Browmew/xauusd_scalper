@@ -71,7 +71,7 @@ class FeaturePipeline:
         Args:
             features_config: Configuration dictionary containing feature parameters
         """
-        self.features_config = features_config
+        self.features_config = features_config or {}
         self.logger = logging.getLogger(__name__)
         
         # Cache frequently used config values

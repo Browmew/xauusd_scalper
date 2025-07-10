@@ -118,19 +118,36 @@ class SmartOrderRouter:
     comprehensive error handling, retry logic, and broker-specific adaptations.
     """
     
-    def __init__(self, broker_configs: List[BrokerConfig], default_broker: str):
-        """
-        Initialize the smart order router.
+    async def execute_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an order via REST API."""
+        if not self._validate_order(order):
+            return {'error': 'INVALID_ORDER', 'message': 'Order validation failed'}
         
-        Args:
-            broker_configs: List of broker configurations
-            default_broker: Name of the default broker to use
-        """
-        self.brokers = {config.name: config for config in broker_configs}
-        self.default_broker = default_broker
+        payload = self._create_payload(order)
+        headers = self._create_headers(payload)
         
-        if default_broker not in self.brokers:
-            raise ValueError(f"Default broker '{default_broker}' not found in configurations")
+        try:
+            if self.session is None:
+                self.session = aiohttp.ClientSession()
+                
+            async with self.session.post(
+                url=self.api_url,
+                json=payload,
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result
+                else:
+                    error_data = await response.json()
+                    return error_data
+        except Exception as e:
+            return {'error': 'EXECUTION_FAILED', 'message': str(e)}
+
+    def __init__(self, api_url: str, api_key: str, api_secret: str):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.api_secret = api_secret
         
         self.session: Optional[aiohttp.ClientSession] = None
         self.websocket_connections: Dict[str, websockets.WebSocketServerProtocol] = {}
@@ -559,6 +576,42 @@ class SmartOrderRouter:
                 status=OrderStatus.REJECTED,
                 error_message=str(e)
             )
+        
+    def _create_payload(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'symbol': order['symbol'],
+            'side': order['side'],
+            'quantity': order['quantity'],
+            'order_type': order['order_type'],
+            'timestamp': datetime.now().isoformat()
+        }
+
+    def _sign_payload(self, payload: Dict[str, Any]) -> str:
+        import hmac
+        import hashlib
+        query_string = '&'.join([f"{k}={v}" for k, v in sorted(payload.items())])
+        return hmac.new(
+            self.api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+    def _create_headers(self, payload: Dict[str, Any]) -> Dict[str, str]:
+        return {
+            'X-API-KEY': self.api_key,
+            'X-SIGNATURE': self._sign_payload(payload),
+            'Content-Type': 'application/json'
+        }
+
+    def _validate_order(self, order: Dict[str, Any]) -> bool:
+        required_fields = ['symbol', 'side', 'quantity', 'order_type']
+        if not all(field in order for field in required_fields):
+            return False
+        if order['side'] not in ['BUY', 'SELL']:
+            return False
+        if order['quantity'] <= 0:
+            return False
+        return True
     
     def get_active_orders(self) -> Dict[str, Order]:
         """Get all active orders."""

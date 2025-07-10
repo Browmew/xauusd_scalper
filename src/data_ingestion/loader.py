@@ -363,30 +363,10 @@ class DataLoader:
             raise
     
     def load_and_align(self, tick_file: str, l2_file: str,
-                       alignment_method: str = 'forward_fill',
-                       chunksize: Optional[int] = None) -> DataFrame:
+                   alignment_method: str = 'forward_fill',
+                   chunksize: Optional[int] = None) -> DataFrame:
         """
         Main method to load both tick and L2 data and return aligned DataFrame.
-        
-        This is the primary interface for the data ingestion module. It loads
-        both data sources and returns a single, analysis-ready DataFrame with
-        millisecond-precision alignment.
-        
-        Args:
-            tick_file: Path to tick data file
-            l2_file: Path to L2 data file
-            alignment_method: Method for temporal alignment
-            chunksize: Optional chunk size for large files
-            
-        Returns:
-            Aligned DataFrame ready for feature engineering and analysis
-            
-        Example:
-            >>> loader = DataLoader()
-            >>> df = loader.load_and_align(
-            ...     'data/historical/ticks/XAUUSD_2023_ticks.csv.gz',
-            ...     'data/historical/l2_orderbook/XAUUSD_2023_l2.csv.gz'
-            ... )
         """
         self.logger.info("Starting data ingestion and alignment",
                         tick_file=tick_file,
@@ -400,13 +380,23 @@ class DataLoader:
             # Load L2 data
             l2_df = self.load_l2_data(l2_file, chunksize=chunksize)
             
+            # If both dataframes are empty, return empty result
+            if tick_df.empty and l2_df.empty:
+                return pd.DataFrame()
+            
+            # If one is empty, return the other
+            if tick_df.empty:
+                return l2_df
+            if l2_df.empty:
+                return tick_df
+            
             # Align the data
             aligned_df = self.align_data(tick_df, l2_df, method=alignment_method)
             
             self.logger.info("Data ingestion completed successfully",
-                           final_rows=len(aligned_df),
-                           final_columns=len(aligned_df.columns),
-                           memory_mb=aligned_df.memory_usage(deep=True).sum() / 1024**2)
+                        final_rows=len(aligned_df),
+                        final_columns=len(aligned_df.columns),
+                        memory_mb=aligned_df.memory_usage(deep=True).sum() / 1024**2)
             
             return aligned_df
             

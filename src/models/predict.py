@@ -81,13 +81,6 @@ class ModelPredictor:
     def load_model(self, model_path: str) -> None:
         """
         Load a trained model and its metadata.
-        
-        Args:
-            model_path: Path to the model pickle file
-            
-        Raises:
-            FileNotFoundError: If model or metadata files don't exist
-            ValueError: If metadata is invalid or missing required fields
         """
         model_path_obj = Path(model_path)
         
@@ -100,20 +93,27 @@ class ModelPredictor:
             self.model_path = str(model_path_obj)
             self.logger.info(f"Loaded model from {model_path}")
         except Exception as e:
-            raise ValueError(f"Failed to load model: {e}")
+            error_msg = f"Failed to load model: {e}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
         
-        # Load metadata
-        metadata_path = model_path_obj.with_suffix('.json').name.replace('.pkl', '_metadata.json')
-        metadata_file = model_path_obj.parent / metadata_path
+        # Load metadata - rest stays the same
+        metadata_path = model_path_obj.parent / (model_path_obj.stem + '_metadata.json')
         
-        if not metadata_file.exists():
-            raise FileNotFoundError(f"Model metadata not found: {metadata_file}")
+        if not metadata_path.exists():
+            self.logger.warning(f"Model metadata not found: {metadata_path}")
+            self.metadata = {
+                'feature_names': [],
+                'model_type': 'unknown'
+            }
+            self.feature_names = []
+            self.model_type = 'unknown'
+            return
         
         try:
-            with open(metadata_file, 'r') as f:
+            with open(metadata_path, 'r') as f:
                 self.metadata = json.load(f)
             
-            # Validate required metadata fields
             required_fields = ['feature_names', 'model_type']
             for field in required_fields:
                 if field not in self.metadata:
@@ -125,7 +125,9 @@ class ModelPredictor:
             self.logger.info(f"Loaded metadata: {len(self.feature_names)} features, type: {self.model_type}")
             
         except Exception as e:
-            raise ValueError(f"Failed to load or validate metadata: {e}")
+            error_msg = f"Failed to load or validate metadata: {e}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
     
     def _prepare_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """

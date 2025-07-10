@@ -223,7 +223,7 @@ def vpvr_breakout(data: pd.DataFrame, lookback: int = 100, volume_threshold_mult
     
     breakouts = _vpvr_breakout_numba(prices, volumes, lookback, min_volume_threshold)
     
-    return pd.Series(breakouts, index=data.index, name='vpvr_breakout')
+    return pd.Series(breakouts, index=data.index, name='vpvr_breakout').astype(int)
 
 
 @jit(nopython=True)

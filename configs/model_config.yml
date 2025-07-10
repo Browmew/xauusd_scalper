@@ -1,0 +1,13 @@
+# configs/model_config.yml
+data:
+  dir: data/historical          # where the CSV lives
+  time_column: timestamp
+  target_column: close          # or whatever you predict
+
+output:
+  model_path: models/xauusd_rf_2022_2025.pkl
+
+model:
+  type: rf              # rf | lgbm | xgb  (trainer supports only rf right now)
+  n_estimators: 300
+  max_depth: 12

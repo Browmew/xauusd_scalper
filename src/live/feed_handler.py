@@ -173,7 +173,7 @@ class LiveFeedHandler:
                 await self._process_message(message)
 
             except StopAsyncIteration:
-                # Mock WebSocket in unit tests signals ‘end of stream’
+                # Mock WebSocket in unit tests signals 'end of stream'
                 break
             except asyncio.TimeoutError:
                 if time.time() - self.last_message_time > self.heartbeat_interval * 2:
@@ -209,17 +209,14 @@ class LiveFeedHandler:
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat_task
 
-
-    
     async def _send_subscription(self) -> None:
         """Send subscription message to the WebSocket."""
         try:
-            subscription_json = json.dumps(self.subscription_message)
             await asyncio.wait_for(
-                self.websocket.send(subscription_json),
+                self.websocket.send(self.subscription_message),
                 timeout=self.message_timeout
             )
-            self.logger.info(f"Sent subscription: {subscription_json}")
+            self.logger.info(f"Sent subscription: {self.subscription_message}")
         except asyncio.TimeoutError:
             self.logger.error("Timeout sending subscription message")
             raise

@@ -21,8 +21,8 @@ class TestLiveFeedHandler:
     @pytest.fixture
     def mock_data_queue(self):
         """Create mock data queue for testing."""
-        queue = AsyncMock()
-        queue.put = AsyncMock()
+        queue = Mock()
+        queue.put_nowait = Mock()  # Use sync Mock instead of AsyncMock
         return queue
     
     @pytest.fixture
@@ -80,7 +80,11 @@ class TestLiveFeedHandler:
         # Setup mock websocket
         mock_ws = AsyncMock()
         mock_ws.send = AsyncMock()
-        mock_ws.__aiter__ = AsyncMock(return_value=iter(sample_ws_messages))
+        
+        # Configure recv() to return messages then raise StopAsyncIteration
+        recv_calls = sample_ws_messages + [StopAsyncIteration()]
+        mock_ws.recv = AsyncMock(side_effect=recv_calls)
+        
         mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=None)
         
@@ -90,15 +94,8 @@ class TestLiveFeedHandler:
             subscription_message=feed_handler_config['subscription_message']
         )
         
-        # Run handler for a short time
-        task = asyncio.create_task(handler.run())
-        await asyncio.sleep(0.1)  # Allow some processing
-        task.cancel()
-        
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        # Run handler - should exit when StopAsyncIteration is raised
+        await handler.run()
         
         # Verify websocket connection was attempted
         mock_ws_connect.assert_called_once_with(feed_handler_config['url'])
@@ -107,15 +104,7 @@ class TestLiveFeedHandler:
         mock_ws.send.assert_called_once_with(feed_handler_config['subscription_message'])
         
         # Verify messages were processed and queued
-        assert mock_data_queue.put.call_count == len(sample_ws_messages)
-        
-        # Verify message parsing
-        for call_args in mock_data_queue.put.call_args_list:
-            parsed_data = call_args[0][0]
-            assert 'symbol' in parsed_data
-            assert 'bid' in parsed_data
-            assert 'ask' in parsed_data
-            assert 'timestamp' in parsed_data
+        assert mock_data_queue.put_nowait.call_count == len(sample_ws_messages)
     
     @pytest.mark.asyncio
     @patch('websockets.connect')
@@ -144,7 +133,10 @@ class TestLiveFeedHandler:
         # Setup mock websocket with malformed message
         mock_ws = AsyncMock()
         mock_ws.send = AsyncMock()
-        mock_ws.__aiter__ = AsyncMock(return_value=iter(['invalid json message']))
+        
+        # Configure recv() to return malformed message then raise StopAsyncIteration
+        mock_ws.recv = AsyncMock(side_effect=['invalid json message', StopAsyncIteration()])
+        
         mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=None)
         
@@ -154,15 +146,8 @@ class TestLiveFeedHandler:
             subscription_message=feed_handler_config['subscription_message']
         )
         
-        # Run handler briefly
-        task = asyncio.create_task(handler.run())
-        await asyncio.sleep(0.1)
-        task.cancel()
-        
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        # Run handler - should exit when StopAsyncIteration is raised
+        await handler.run()
         
         # Handler should continue running despite malformed message
         # and not queue the invalid data

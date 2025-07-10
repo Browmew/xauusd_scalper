@@ -214,10 +214,9 @@ def setup_logging() -> None:
         backupCount=10,
         encoding='utf-8'
     )
-    error_handler.setLevel(logging.ERROR)
     error_formatter = logging.Formatter(
         '%(asctime)s | %(levelname)s | %(name)s | %(message)s | %(pathname)s:%(lineno)d',
-        datefmt='%Y-%m-%d %H:%M:%S.%f'
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
     error_handler.setFormatter(error_formatter)
     

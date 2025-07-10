@@ -49,6 +49,11 @@ class TestDataLoader:
         tick_file = tmp_path / "tick_data.csv.gz"
         l2_file = tmp_path / "l2_data.csv.gz"
         
+        # Ensure bid_volume column exists in tick_data
+        if 'bid_volume' not in tick_data.columns:
+            tick_data = tick_data.copy()
+            tick_data['bid_volume'] = tick_data.get('volume', [100] * len(tick_data))
+        
         # Write tick data as gzipped CSV
         with gzip.open(tick_file, 'wt', encoding='utf-8') as f:
             tick_data.to_csv(f, index=False)

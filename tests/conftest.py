@@ -153,6 +153,13 @@ def sample_data_df() -> pd.DataFrame:
     
     return df
 
+@pytest.fixture(scope='session')
+def sample_price_series(sample_data_df: pd.DataFrame) -> pd.Series:
+    """
+    Extract close prices as a Series for functions that only need price data.
+    """
+    return sample_data_df['close']
+
 
 @pytest.fixture
 def market_data_small() -> pd.DataFrame:

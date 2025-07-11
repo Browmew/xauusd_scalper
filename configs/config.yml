@@ -129,6 +129,8 @@ models:
   # Primary model
   primary:
     type: "lightgbm"
+    signal_threshold: 0.2
+    min_prediction_confidence: 0.65
     objective: "binary"
     metric: "binary_logloss"
     boosting_type: "gbdt"
@@ -277,14 +279,14 @@ risk:
   # Stop loss
   stop_loss:
     method: "atr_multiple"
-    atr_multiple: 2.0
+    atr_multiple: 4.0
     atr_period: 14
-    max_stop_pips: 50
+    max_stop_pips: 100
     
   # Daily limits
   daily_limits:
     max_loss_usd: 2000.0  # Hard daily loss stop
-    max_trades: 100
+    max_trades: 50
     max_exposure_lots: 20.0
     
   # Session filters

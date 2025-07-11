@@ -15,18 +15,18 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import yaml
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from .data_ingestion.loader import DataLoader
-from .features.feature_pipeline import FeaturePipeline
-from .models.train import ModelTrainer
-from .models.predict import ModelPredictor
-from .backtesting.engine import BacktestEngine
-from .backtesting.reporting import generate_report
-from .live.engine import LiveEngine
-from .utils.logging import setup_logging
-from .utils.helpers import get_config_value
+from src.data_ingestion.loader import DataLoader
+from src.features.feature_pipeline import FeaturePipeline
+from src.models.train import ModelTrainer
+from src.models.predict import ModelPredictor
+from src.backtesting.engine import BacktestEngine
+from src.backtesting.reporting import generate_report
+from src.live.engine import LiveEngine
+from src.utils.logging import setup_logging
+from src.utils.helpers import get_config_value
 
 
 @click.group()

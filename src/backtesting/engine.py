@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, List, Tuple
 import time
 from dataclasses import dataclass, field
 
+from ..utils.helpers import get_config_value
 from ..utils.logging import get_logger
 from ..utils.helpers import get_config_value, get_project_root
 from ..data_ingestion.loader import DataLoader
@@ -488,10 +489,11 @@ class BacktestEngine:
             return
         
         # Determine signal direction and strength
-        if signal > 0.1:  # Bullish signal
+        signal_threshold = get_config_value('models.primary.signal_threshold', 0.2)
+        if signal > signal_threshold:  # Bullish signal
             signal_direction = 'long'
             signal_strength = signal * confidence
-        elif signal < -0.1:  # Bearish signal
+        elif signal < -signal_threshold:  # Bearish signal
             signal_direction = 'short'
             signal_strength = abs(signal) * confidence
         else:
@@ -778,12 +780,13 @@ class BacktestEngine:
         
         # Calculate stop loss and take profit
         atr = tick_data.get('atr_14', 0.5)  # Use ATR for stops
+        atr_multiplier = get_config_value('risk.stop_loss.atr_multiple', 4.0)
         if side == 'long':
-            stop_loss = entry_price - (atr * 2.0)  # 2 ATR stop
-            take_profit = entry_price + (atr * 1.5)  # 1.5 ATR target
+            stop_loss = entry_price - (atr * atr_multiplier)  # Use config
+            take_profit = entry_price + (atr * 3.0)  # Wider profit target
         else:
-            stop_loss = entry_price + (atr * 2.0)
-            take_profit = entry_price - (atr * 1.5)
+            stop_loss = entry_price + (atr * atr_multiplier)
+            take_profit = entry_price - (atr * 3.0)
         
         # Create position
         self.position_counter += 1

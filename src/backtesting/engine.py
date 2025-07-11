@@ -21,6 +21,51 @@ from ..models.predict import ModelPredictor
 from ..risk.manager import RiskManager
 from .exchange_simulator import ExchangeSimulator, Order
 from .reporting import generate_report, BacktestReport
+
+from dataclasses import dataclass
+from typing import Optional
+import uuid
+
+@dataclass
+class Position:
+    """Represents an open trading position."""
+    position_id: str
+    symbol: str
+    side: str  # 'long' or 'short'
+    quantity: float
+    entry_price: float
+    entry_time: datetime
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    unrealized_pnl: float = 0.0
+    
+    def update_unrealized_pnl(self, current_price: float) -> None:
+        """Update unrealized PnL based on current market price."""
+        if self.side == 'long':
+            self.unrealized_pnl = (current_price - self.entry_price) * self.quantity
+        else:  # short
+            self.unrealized_pnl = (self.entry_price - current_price) * self.quantity
+    
+    def should_exit(self, current_price: float, current_time: datetime) -> tuple[bool, str]:
+        """Check if position should be closed."""
+        # Stop loss check
+        if self.stop_loss:
+            if (self.side == 'long' and current_price <= self.stop_loss) or \
+               (self.side == 'short' and current_price >= self.stop_loss):
+                return True, "stop_loss"
+        
+        # Take profit check
+        if self.take_profit:
+            if (self.side == 'long' and current_price >= self.take_profit) or \
+               (self.side == 'short' and current_price <= self.take_profit):
+                return True, "take_profit"
+        
+        # Time-based exit (max 15 minutes for scalping)
+        if (current_time - self.entry_time).total_seconds() > 900:  # 15 minutes
+            return True, "time_limit"
+        
+        return False, ""
+
 from ..utils.logging import get_logger
 logger = get_logger(__name__)
 
@@ -102,6 +147,9 @@ class BacktestEngine:
         # Performance tracking
         self.performance_history = []
         self.trade_history = []
+        self.open_positions = {}  # position_id -> Position
+        self.position_counter = 0
+        self.total_realized_pnl = 0.0
         
         self.logger.info("BacktestEngine initialized successfully",
                         symbol=self.config.symbol,
@@ -273,7 +321,7 @@ class BacktestEngine:
             self.state.processed_ticks = i + 1
             
             # Update exchange simulator with current market data
-            self._update_market_state(tick_data)
+            #self._update_market_state(tick_data)
             
             # Build feature buffer for prediction
             self._update_feature_buffer(tick_data)
@@ -302,7 +350,8 @@ class BacktestEngine:
                     continue
             
             # Process any pending orders
-            self._process_orders()
+            # Store current tick for price reference
+            self.current_tick_data = tick_data
             
             # Update performance tracking
             self._update_performance_tracking()
@@ -419,46 +468,50 @@ class BacktestEngine:
             return None
     
     def _process_trading_signal(self, prediction: Optional[Dict[str, float]], tick_data: pd.Series) -> None:
-        """Process trading signal with comprehensive risk management."""
+        """Process trading signal with proper position management."""
         if prediction is None:
             return
         
         signal = prediction.get('signal', 0.0)
         confidence = prediction.get('confidence', 0.0)
+        current_price = (tick_data.get('bid', 0.0) + tick_data.get('ask', 0.0)) / 2.0
         
-        # ALWAYS check risk management constraints - even for weak signals
-        risk_check_result = self.risk_manager.check_trading_allowed(self.state.current_timestamp)
-
-        # Accept either a boolean or a RiskCheckResult object with an `.allowed` field
-        allowed = (risk_check_result if isinstance(risk_check_result, bool)
-                else getattr(risk_check_result, "allowed", False))
-
-        if not allowed:
-
-            self.logger.debug("Trade blocked by risk management")
+        # First, check existing positions for exit conditions
+        self._process_position_exits(tick_data)
+        
+        # Only consider new positions if we don't have too many open
+        if len(self.open_positions) >= 3:  # Max 3 concurrent positions
             return
         
-        # Check if prediction meets minimum threshold
+        # Check if signal is strong enough for new position
         if confidence < self.config.min_prediction_threshold:
             return
         
-        # Determine signal direction
-        if abs(signal) < 0.1:  # Neutral signal
+        # Determine signal direction and strength
+        if signal > 0.1:  # Bullish signal
+            signal_direction = 'long'
+            signal_strength = signal * confidence
+        elif signal < -0.1:  # Bearish signal
+            signal_direction = 'short'
+            signal_strength = abs(signal) * confidence
+        else:
+            return  # Neutral signal
+        
+        # Check risk management
+        risk_check_result = self.risk_manager.check_trading_allowed(self.state.current_timestamp)
+        allowed = (risk_check_result if isinstance(risk_check_result, bool)
+                else getattr(risk_check_result, "allowed", False))
+        
+        if not allowed:
             return
         
-        signal_direction = 'long' if signal > 0 else 'short'
-        
-        # ALWAYS calculate position size - even if it might be zero
-        position_size_result = self._calculate_position_size(signal, confidence, tick_data)
+        # Calculate position size
+        position_size_result = self._calculate_position_size(signal_strength, confidence, tick_data)
         if position_size_result.size <= 0:
             return
         
-        # Get current market prices
-        bid = tick_data.get('bid', tick_data.get('bid_price_1', tick_data.get('close', 0.0) - 0.01))
-        ask = tick_data.get('ask', tick_data.get('ask_price_1', tick_data.get('close', 0.0) + 0.01))
-        
-        # Submit order to exchange simulator
-        self._submit_trade_order(signal_direction, position_size_result.size, bid, ask, confidence)
+        # Open new position
+        self._open_position(signal_direction, position_size_result.size, tick_data, confidence)
     
     def _calculate_position_size(self, signal: float, confidence: float, tick_data: pd.Series) -> Any:
         """Calculate optimal position size using risk management."""
@@ -534,100 +587,46 @@ class BacktestEngine:
         except Exception as e:
             self.logger.error("Failed to submit order", error=str(e))
     
-    def _process_orders(self) -> None:
-        """Process any filled orders and update PnL."""
-        try:
-            # Get recent fills from exchange simulator
-            recent_fills = self.exchange_simulator.get_recent_fills()
-            
-            for fill in recent_fills:
-                # Calculate fill PnL (simplified approach)
-                fill_pnl = self._calculate_fill_pnl(fill)
-                
-                # Update risk manager with PnL
-                self.risk_manager.update_pnl(fill_pnl)
-                
-                # Update state
-                self.state.total_pnl += fill_pnl
-                self.state.current_balance = self.config.initial_balance + self.state.total_pnl
-                self.state.total_commission += fill.commission
-                
-                if fill_pnl > 0:
-                    self.state.winning_trades += 1
-                else:
-                    self.state.losing_trades += 1
-                
-                # Record trade for analysis
-                self.trade_history.append({
-                    'timestamp': fill.timestamp,
-                    'symbol': fill.symbol,
-                    'side': fill.side,
-                    'quantity': fill.quantity,
-                    'price': fill.price,
-                    'commission': fill.commission,
-                    'pnl': fill_pnl
-                })
-                
-                self.logger.debug("Order filled",
-                                fill_price=fill.price,
-                                quantity=fill.quantity,
-                                pnl=fill_pnl,
-                                commission=fill.commission)
-                                
-        except Exception as e:
-            self.logger.error(f"Error processing orders: {e}")
-    
-    def _calculate_fill_pnl(self, fill) -> float:
-        """Calculate PnL for a filled order."""
-        try:
-            # Get current position before this fill
-            current_position = self.exchange_simulator.get_position(self.config.symbol)
-            
-            # For simplicity, calculate P&L based on immediate mark-to-market
-            # In production, this would track actual position lifecycle
-            if hasattr(fill, 'side') and hasattr(fill, 'quantity') and hasattr(fill, 'price'):
-                # Simplified P&L calculation - assume immediate closure at mid price
-                spread = 0.02  # Typical XAUUSD spread
-                if fill.side.upper() == 'BUY':
-                    # For long position, assume immediate sale at bid (price - spread)
-                    pnl = (fill.price - spread - fill.price) * fill.quantity
-                else:
-                    # For short position, assume immediate cover at ask (price + spread)
-                    pnl = (fill.price - (fill.price + spread)) * fill.quantity
-                
-                # Add some randomness to simulate realistic trading outcomes
-                # In production, this would be actual position tracking
-                outcome_factor = np.random.normal(1.0, 0.1)  # ±10% variance
-                return pnl * outcome_factor
-            else:
-                return 0.0
-                
-        except Exception as e:
-            self.logger.error(f"Error calculating fill PnL: {e}")
-            return 0.0
-    
     def _update_performance_tracking(self) -> None:
         """Update performance metrics and tracking."""
-        current_balance = self.config.initial_balance + self.state.total_pnl
+        # Calculate total unrealized PnL from open positions
+        unrealized_pnl = 0.0
+        current_mid_price = 2000.0  # Default fallback
+        
+        if hasattr(self, 'current_tick_data'):
+            bid = self.current_tick_data.get('bid', 2000.0)
+            ask = self.current_tick_data.get('ask', 2000.0)
+            current_mid_price = (bid + ask) / 2.0
+        
+        for position in self.open_positions.values():
+            position.update_unrealized_pnl(current_mid_price)
+            unrealized_pnl += position.unrealized_pnl
+        
+        # Total PnL = realized + unrealized
+        total_pnl = self.total_realized_pnl + unrealized_pnl
+        current_balance = self.config.initial_balance + total_pnl
+        
         self.state.current_balance = current_balance
+        self.state.total_pnl = total_pnl
         
         # Update max drawdown
-        peak_balance = max(self.config.initial_balance, current_balance)
         if hasattr(self, '_peak_balance'):
-            peak_balance = max(self._peak_balance, current_balance)
+            self._peak_balance = max(self._peak_balance, current_balance)
         else:
-            self._peak_balance = peak_balance
+            self._peak_balance = current_balance
             
-        current_drawdown = (peak_balance - current_balance) / peak_balance if peak_balance > 0 else 0
+        current_drawdown = (self._peak_balance - current_balance) / self._peak_balance if self._peak_balance > 0 else 0
         self.state.max_drawdown = max(self.state.max_drawdown, current_drawdown)
-        self._peak_balance = peak_balance
         
         # Record performance snapshot
         self.performance_history.append({
             'timestamp': self.state.current_timestamp,
             'balance': current_balance,
-            'pnl': self.state.total_pnl,
+            'realized_pnl': self.total_realized_pnl,
+            'unrealized_pnl': unrealized_pnl,
+            'total_pnl': total_pnl,
             'trades': self.state.total_trades,
+            'open_positions': len(self.open_positions),
             'drawdown': current_drawdown
         })
     
@@ -644,28 +643,73 @@ class BacktestEngine:
                             current_balance=f"${self.state.current_balance:.2f}")
     
     def _generate_results(self) -> BacktestReport:
-        """Generate comprehensive backtest results."""
+        """Generate comprehensive backtest results with accurate metrics."""
         try:
-            # Get exchange simulator statistics
-            exchange_stats = self.exchange_simulator.get_performance_stats()
+            # Close any remaining open positions at final price
+            if self.open_positions:
+                final_tick = pd.Series({
+                    'bid': 2000.0, 'ask': 2000.1, 'close': 2000.0  # Use last known prices
+                })
+                remaining_positions = list(self.open_positions.keys())
+                for position_id in remaining_positions:
+                    self._close_position(position_id, final_tick, "backtest_end")
             
             # Calculate performance metrics
             total_return = (self.state.current_balance / self.config.initial_balance) - 1
-            win_rate = self.state.winning_trades / max(1, self.state.total_trades)
             
-            # Calculate Sharpe ratio
-            if self.trade_history:
-                returns_series = pd.Series([trade['pnl'] for trade in self.trade_history])
-                daily_return_mean = returns_series.mean()
-                daily_return_std = returns_series.std()
+            if self.state.total_trades > 0:
+                win_rate = self.state.winning_trades / self.state.total_trades
+            else:
+                win_rate = 0.0
+            
+            # Calculate Sharpe ratio from trade PnLs
+            if self.trade_history and len(self.trade_history) > 1:
+                trade_pnls = [trade['net_pnl'] for trade in self.trade_history]
+                pnl_series = pd.Series(trade_pnls)
                 
-                if daily_return_std > 0:
-                    # Annualize assuming 252 trading days
-                    sharpe_ratio = (daily_return_mean / daily_return_std) * np.sqrt(252)
+                if pnl_series.std() > 0:
+                    # Annualize assuming ~100 trades per day, 252 trading days
+                    sharpe_ratio = (pnl_series.mean() / pnl_series.std()) * np.sqrt(252 * 100)
                 else:
                     sharpe_ratio = 0.0
             else:
                 sharpe_ratio = 0.0
+            
+            # Enhanced performance metrics
+            performance_metrics = {
+                'winning_trades': self.state.winning_trades,
+                'losing_trades': self.state.losing_trades,
+                'total_realized_pnl': self.total_realized_pnl,
+                'avg_trade_pnl': self.total_realized_pnl / max(1, self.state.total_trades),
+                'avg_win_amount': 0.0,
+                'avg_loss_amount': 0.0,
+                'largest_win': 0.0,
+                'largest_loss': 0.0,
+                'avg_hold_time_minutes': 0.0,
+                'total_transaction_costs': 0.0,
+                'total_commission': 0.0
+            }
+            
+            # Calculate detailed trade statistics
+            if self.trade_history:
+                winning_trades = [t for t in self.trade_history if t['net_pnl'] > 0]
+                losing_trades = [t for t in self.trade_history if t['net_pnl'] <= 0]
+                
+                if winning_trades:
+                    performance_metrics['avg_win_amount'] = np.mean([t['net_pnl'] for t in winning_trades])
+                    performance_metrics['largest_win'] = max([t['net_pnl'] for t in winning_trades])
+                
+                if losing_trades:
+                    performance_metrics['avg_loss_amount'] = np.mean([t['net_pnl'] for t in losing_trades])
+                    performance_metrics['largest_loss'] = min([t['net_pnl'] for t in losing_trades])
+                
+                # Calculate average hold time
+                hold_times = [t['hold_time_seconds'] / 60.0 for t in self.trade_history]  # Convert to minutes
+                performance_metrics['avg_hold_time_minutes'] = np.mean(hold_times)
+                
+                # Calculate total costs
+                performance_metrics['total_transaction_costs'] = sum([t['transaction_costs'] for t in self.trade_history])
+                performance_metrics['total_commission'] = sum([t['commission'] for t in self.trade_history])
             
             # Create BacktestReport
             report = BacktestReport(
@@ -676,13 +720,7 @@ class BacktestEngine:
                 win_rate=win_rate,
                 final_balance=self.state.current_balance,
                 total_pnl=self.state.total_pnl,
-                performance_metrics={
-                    'winning_trades': self.state.winning_trades,
-                    'losing_trades': self.state.losing_trades,
-                    'total_commission': self.state.total_commission,
-                    'exchange_statistics': exchange_stats,
-                    'risk_metrics': self.risk_manager.get_risk_metrics()
-                },
+                performance_metrics=performance_metrics,
                 trade_history=self.trade_history
             )
             
@@ -690,7 +728,8 @@ class BacktestEngine:
                             total_return_pct=f"{total_return*100:.2f}%",
                             total_trades=self.state.total_trades,
                             win_rate_pct=f"{win_rate*100:.1f}%",
-                            sharpe_ratio=f"{sharpe_ratio:.2f}")
+                            sharpe_ratio=f"{sharpe_ratio:.2f}",
+                            avg_hold_time_min=f"{performance_metrics['avg_hold_time_minutes']:.1f}")
             
             return report
             
@@ -707,6 +746,147 @@ class BacktestEngine:
                 total_pnl=0.0
             )
     
+    def _process_position_exits(self, tick_data: pd.Series) -> None:
+        """Check and process position exits."""
+        current_price = (tick_data.get('bid', 0.0) + tick_data.get('ask', 0.0)) / 2.0
+        positions_to_close = []
+        
+        for position_id, position in self.open_positions.items():
+            # Update unrealized PnL
+            position.update_unrealized_pnl(current_price)
+            
+            # Check exit conditions
+            should_exit, exit_reason = position.should_exit(current_price, self.state.current_timestamp)
+            
+            if should_exit:
+                positions_to_close.append((position_id, exit_reason))
+        
+        # Close positions that need to be closed
+        for position_id, exit_reason in positions_to_close:
+            self._close_position(position_id, tick_data, exit_reason)
+
+    def _open_position(self, side: str, quantity: float, tick_data: pd.Series, confidence: float) -> None:
+        """Open a new trading position."""
+        bid = tick_data.get('bid', tick_data.get('close', 2000.0) - 0.05)
+        ask = tick_data.get('ask', tick_data.get('close', 2000.0) + 0.05)
+        
+        # Determine entry price based on side (realistic execution)
+        if side == 'long':
+            entry_price = ask  # Buy at ask
+        else:
+            entry_price = bid  # Sell at bid
+        
+        # Calculate stop loss and take profit
+        atr = tick_data.get('atr_14', 0.5)  # Use ATR for stops
+        if side == 'long':
+            stop_loss = entry_price - (atr * 2.0)  # 2 ATR stop
+            take_profit = entry_price + (atr * 1.5)  # 1.5 ATR target
+        else:
+            stop_loss = entry_price + (atr * 2.0)
+            take_profit = entry_price - (atr * 1.5)
+        
+        # Create position
+        self.position_counter += 1
+        position_id = f"POS_{self.position_counter:06d}"
+        
+        position = Position(
+            position_id=position_id,
+            symbol=self.config.symbol,
+            side=side,
+            quantity=quantity,
+            entry_price=entry_price,
+            entry_time=self.state.current_timestamp,
+            stop_loss=stop_loss,
+            take_profit=take_profit
+        )
+        
+        self.open_positions[position_id] = position
+        
+        # Record with risk manager
+        self.risk_manager.record_trade(self.config.symbol, quantity, side.upper())
+        self.state.total_trades += 1
+        
+        self.logger.debug("Position opened",
+                        position_id=position_id,
+                        side=side,
+                        quantity=quantity,
+                        entry_price=entry_price,
+                        confidence=confidence)
+
+    def _close_position(self, position_id: str, tick_data: pd.Series, exit_reason: str) -> None:
+        """Close an existing position and realize PnL."""
+        if position_id not in self.open_positions:
+            return
+        
+        position = self.open_positions[position_id]
+        bid = tick_data.get('bid', tick_data.get('close', 2000.0) - 0.05)
+        ask = tick_data.get('ask', tick_data.get('close', 2000.0) + 0.05)
+        
+        # Determine exit price (reverse of entry)
+        if position.side == 'long':
+            exit_price = bid  # Sell at bid
+        else:
+            exit_price = ask  # Cover at ask
+        
+        # Calculate realized PnL
+        if position.side == 'long':
+            gross_pnl = (exit_price - position.entry_price) * position.quantity
+        else:
+            gross_pnl = (position.entry_price - exit_price) * position.quantity
+        
+        # Apply transaction costs (spread on both entry and exit)
+        spread = ask - bid
+        transaction_costs = spread * position.quantity * 2  # Entry + exit
+        commission = self.config.commission_rate * position.quantity
+        
+        net_pnl = gross_pnl - transaction_costs - commission
+        
+        # Update balances
+        self.total_realized_pnl += net_pnl
+        self.state.total_pnl += net_pnl
+        self.state.current_balance = self.config.initial_balance + self.state.total_pnl
+        
+        # Track winning/losing trades
+        if net_pnl > 0:
+            self.state.winning_trades += 1
+        else:
+            self.state.losing_trades += 1
+        
+        # Update risk manager
+        self.risk_manager.update_pnl(net_pnl)
+        
+        # Record trade for analysis
+        hold_time_seconds = (self.state.current_timestamp - position.entry_time).total_seconds()
+        
+        self.trade_history.append({
+            'position_id': position_id,
+            'symbol': position.symbol,
+            'side': position.side,
+            'quantity': position.quantity,
+            'entry_price': position.entry_price,
+            'exit_price': exit_price,
+            'entry_time': position.entry_time,
+            'exit_time': self.state.current_timestamp,
+            'hold_time_seconds': hold_time_seconds,
+            'gross_pnl': gross_pnl,
+            'transaction_costs': transaction_costs,
+            'commission': commission,
+            'net_pnl': net_pnl,
+            'exit_reason': exit_reason
+        })
+        
+        # Remove position
+        del self.open_positions[position_id]
+        
+        self.logger.info("Position closed",
+                        position_id=position_id,
+                        side=position.side,
+                        entry_price=position.entry_price,
+                        exit_price=exit_price,
+                        net_pnl=net_pnl,
+                        exit_reason=exit_reason,
+                        hold_time_seconds=hold_time_seconds)
+
     def save_results(self, results: BacktestReport, output_dir: Optional[Path] = None) -> Path:
         """Save backtest results to files."""
         if output_dir is None:

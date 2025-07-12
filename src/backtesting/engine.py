@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Optional
 import uuid
 
+
 @dataclass
 class Position:
     """Represents an open trading position."""
